@@ -1,0 +1,14 @@
+{
+  "name": "Tempo — planes de entrenamiento",
+  "short_name": "Tempo",
+  "description": "Sigue tu plan, registra tus series y mira cómo progresas.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f3f2f2",
+  "theme_color": "#f3f2f2",
+  "lang": "es-ES",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

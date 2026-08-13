@@ -3,30 +3,27 @@
 --
 --   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/01_schema.sql
 --
--- Todo vive en el schema `tempo` para no ensuciar `public`.
+-- Todo vive en `public`, que es donde Supabase espera encontrarlo: el SQL
+-- editor, PostgREST y las herramientas del panel miran ahí. No se crea ningún
+-- schema propio — el `SET search_path` de abajo solo fija dónde aterrizan los
+-- objetos si alguien corre esto con otro search_path por defecto.
+--
 -- Convenciones:
---   · ids uuid con gen_random_uuid() (pgcrypto, incluido en core desde PG13)
+--   · ids uuid con gen_random_uuid() (core desde PG13, sin extensiones)
 --   · timestamptz siempre, nunca timestamp desnudo
 --   · cargas en numeric(6,2) — kg con un decimal, sin errores de float
 --   · borrado en cascada hacia abajo del árbol rutina → día → ejercicio
 -- ═══════════════════════════════════════════════════════════════════════════
 
--- gen_random_uuid() es core desde PG13. pgcrypto solo hace falta en versiones
--- anteriores, así que si no está disponible seguimos adelante.
-DO $$
-BEGIN
-  CREATE EXTENSION IF NOT EXISTS pgcrypto;
-EXCEPTION WHEN OTHERS THEN
-  RAISE NOTICE 'pgcrypto no disponible: se usa gen_random_uuid() del core.';
-END $$;
-
-CREATE SCHEMA IF NOT EXISTS tempo;
-SET search_path TO tempo, public;
+SET search_path TO public;
 
 -- ── Tipos ──────────────────────────────────────────────────────────────────
 
 CREATE TYPE user_role        AS ENUM ('alumno', 'entrenador', 'admin');
-CREATE TYPE muscle_group     AS ENUM ('Pecho', 'Espalda', 'Pierna', 'Hombro', 'Brazo', 'Core');
+-- El orden del enum es el orden de los chips de filtro en /ejercicios y de los
+-- radios del alta: `getGrupos()` lee `enum_range()`. Los nuevos van al final.
+CREATE TYPE muscle_group     AS ENUM ('Pecho', 'Espalda', 'Pierna', 'Hombro', 'Brazo', 'Core',
+                                      'Trapecio', 'Antebrazo');
 CREATE TYPE routine_level    AS ENUM ('Principiante', 'Intermedio', 'Avanzado', 'Todos');
 CREATE TYPE routine_status   AS ENUM ('activa', 'guardada', 'borrador', 'plantilla');
 CREATE TYPE progression_kind AS ENUM ('lineal', 'doble', 'manual');
@@ -390,3 +387,38 @@ BEGIN NEW.updated_at := now(); RETURN NEW; END; $$;
 CREATE TRIGGER routines_touch
   BEFORE UPDATE ON routines
   FOR EACH ROW EXECUTE FUNCTION touch_updated_at();
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- Row Level Security
+-- ═══════════════════════════════════════════════════════════════════════════
+-- En Supabase, `public` es el schema que publica PostgREST: cualquiera con la
+-- clave anónima —que viaja en el navegador— puede leer y escribir sus tablas.
+-- Vivir en un schema aparte tapaba eso sin querer; aquí hay que decirlo.
+--
+-- RLS activada y sin políticas = nadie pasa por esa puerta. La app no se
+-- entera: entra por DATABASE_URL con el rol dueño de las tablas, y el dueño
+-- salta RLS mientras no se use FORCE ROW LEVEL SECURITY. Cuando haya auth de
+-- verdad (users.auth_id), las políticas por usuario van justo aquí.
+
+ALTER TABLE users             ENABLE ROW LEVEL SECURITY;
+ALTER TABLE exercises         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE routines          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE routine_days      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE routine_exercises ENABLE ROW LEVEL SECURITY;
+ALTER TABLE assignments       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE workout_sessions  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE set_logs          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE personal_records  ENABLE ROW LEVEL SECURITY;
+
+-- Una vista consulta con los permisos de su dueño salvo que se diga lo
+-- contrario: sin esto, session_summaries enseñaría set_logs esquivando las RLS
+-- de arriba. `security_invoker` es de PG15+; en PG14 la vista se queda como
+-- está y la protección la da el GRANT.
+DO $$
+BEGIN
+  IF current_setting('server_version_num')::int >= 150000 THEN
+    EXECUTE 'ALTER VIEW session_summaries SET (security_invoker = on)';
+  ELSE
+    RAISE NOTICE 'PG14: session_summaries se queda sin security_invoker.';
+  END IF;
+END $$;

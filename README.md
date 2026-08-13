@@ -28,10 +28,11 @@ npm install
 
 # 2. Configuración
 cp .env.example .env        # en Windows: copy .env.example .env
-#    editá DATABASE_URL con tu Postgres local
+#    editá DATABASE_URL: tu Postgres local o el de Supabase
 
 # 3. Base de datos
-createdb tempo              # o creala desde pgAdmin
+createdb tempo              # local: o creala desde pgAdmin
+                            # Supabase: la base ya existe, saltate este paso
 npm run db:create           # esquema, funciones y vistas
 npm run db:seed             # datos del prototipo: 12 semanas de historial
 
@@ -39,18 +40,28 @@ npm run db:seed             # datos del prototipo: 12 semanas de historial
 npm run dev                 # http://localhost:3000
 ```
 
-`npm run db:reset` rehace todo desde cero (destructivo).
+`npm run db:reset` rehace todo desde cero (destructivo) y `npm run db:migrate`
+lleva una base que ya tiene datos al esquema de hoy.
+
+Todo el esquema vive en `public`, sin schema propio: es lo que espera Supabase
+—el SQL editor, el explorador de tablas y PostgREST miran ahí— y evita tener
+que exponer un schema aparte en cada sitio. Los scripts nunca crean ni borran
+`public`, solo sus objetos: ese schema trae permisos y configuración del
+proyecto que no conviene rehacer. Las tablas se crean con RLS activada y sin
+políticas, así que la clave anónima no llega a ellas; la app entra por
+`DATABASE_URL` con el rol dueño, que salta RLS.
 
 Los scripts llaman a `psql`; si no lo tenés en el PATH, abrí los archivos de
-`db/` en pgAdmin y ejecutalos en orden.
+`db/` en pgAdmin —o en el SQL editor de Supabase— y ejecutalos en orden.
 
 ## Cómo está organizado
 
 ```
 db/
-  00_reset.sql        Borra el schema `tempo` entero
+  00_reset.sql        Borra los objetos de Tempo en `public` (no el schema)
   01_schema.sql       Tablas, tipos, índices, vistas y funciones ← fuente de la verdad
-  02_seed.sql         Datos del prototipo, generados relativos a now()
+  02_…                Migraciones para bases que ya tienen datos
+  99_seed.sql         Datos del prototipo, generados relativos a now()
 src/
   app/
     layout.tsx        Cabecera, shell y barra de pestañas

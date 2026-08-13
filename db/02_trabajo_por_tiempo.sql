@@ -18,7 +18,7 @@
 --   tumbaba el arranque del entrenamiento.
 -- ═══════════════════════════════════════════════════════════════════════════
 
-SET search_path TO tempo, public;
+SET search_path TO public;
 
 BEGIN;
 

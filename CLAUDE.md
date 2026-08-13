@@ -20,8 +20,10 @@ npm run db:seed      # db/99_seed.sql — 12 semanas de historial relativas a no
 npm run db:reset     # 00 + 01 + 99, destructivo
 ```
 
-Requiere Postgres local y un `.env` con `DATABASE_URL` y `MOCK_USER_ID`
-(ver `.env.example`). Todo el esquema vive en el schema `tempo`, no en `public`.
+Requiere Postgres (local o Supabase) y un `.env` con `DATABASE_URL` y
+`MOCK_USER_ID` (ver `.env.example`). Todo el esquema vive en `public`, sin
+schema propio: es donde Supabase espera encontrarlo. Los scripts no crean ni
+borran `public` —trae permisos y configuración del proyecto—, solo sus objetos.
 
 Usuarios del seed:
 - `11111111-…1111` Marco Duarte (alumno)
@@ -91,6 +93,14 @@ rango se resuelve por el extremo bajo. Nunca quitar los no-dígitos a pelo:
 en vez de soltar una violación de clave ajena. Renombrarlo sí se permite
 siempre — todo apunta por id, así que corregir una errata la arregla en las
 rutinas y en el historial a la vez.
+
+**Las tablas van con RLS activada y sin políticas.** En `public`, PostgREST
+publica lo que haya: la clave anónima de Supabase viaja en el navegador y sin
+RLS lee y escribe todo. La app no se entera porque entra por `DATABASE_URL` con
+el rol dueño de las tablas, que salta RLS. Una tabla nueva se crea igual —
+`ENABLE ROW LEVEL SECURITY` en `01_schema.sql` y en su migración—, y
+`session_summaries` lleva `security_invoker` para no enseñar `set_logs` por la
+puerta de atrás.
 
 **Solo una sesión en curso por usuario**, garantizado por un índice único
 parcial. "Empezar" reanuda si hay una abierta, no duplica.

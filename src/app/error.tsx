@@ -4,7 +4,7 @@ export default function Error({ error, reset }: { error: Error; reset: () => voi
   const esDb =
     error.message.includes("DATABASE_URL") ||
     error.message.includes("ECONNREFUSED") ||
-    error.message.includes("tempo.users") ||
+    error.message.includes("MOCK_USER_ID") ||
     error.message.includes('relation "');
 
   return (
@@ -29,9 +29,8 @@ export default function Error({ error, reset }: { error: Error; reset: () => voi
               overflowX: "auto",
             }}
           >
-            {`createdb tempo
-psql "$DATABASE_URL" -f db/01_schema.sql
-psql "$DATABASE_URL" -f db/02_seed.sql`}
+            {`npm run db:create
+npm run db:seed`}
           </pre>
         </>
       ) : (

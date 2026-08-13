@@ -1,14 +1,14 @@
 -- ═══════════════════════════════════════════════════════════════════════════
 -- Tempo — datos semilla (los del prototipo de diseño).
 --
---   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/02_seed.sql
+--   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/99_seed.sql
 --
 -- Idempotente: se puede volver a correr, borra lo suyo y lo vuelve a insertar.
 -- El historial se genera relativo a now(), así que las gráficas tienen sentido
 -- se ejecute el día que se ejecute.
 -- ═══════════════════════════════════════════════════════════════════════════
 
-SET search_path TO tempo, public;
+SET search_path TO public;
 
 BEGIN;
 
@@ -20,7 +20,7 @@ TRUNCATE personal_records, set_logs, workout_sessions, assignments,
 
 INSERT INTO users (id, email, nombre, role, coach_id) VALUES
   ('22222222-2222-2222-2222-222222222222', 'laura@tempo.gym',  'Laura Ferrán',    'entrenador', NULL),
-  ('11111111-1111-1111-1111-111111111111', 'marco@tempo.gym',  'Marco Duarte',    'alumno', '22222222-2222-2222-2222-222222222222'),
+  ('11111111-1111-1111-1111-111111111111', 'marco@tempo.gym',  'Marco Duarte',    'alumno', '22222222-2222-2222-2222-222222222222');
 
 -- ── Catálogo de ejercicios ─────────────────────────────────────────────────
 
@@ -100,7 +100,7 @@ INSERT INTO exercises (nombre, grupo, equipo) VALUES
   ('Flexión de cadera en plancha lateral',             'Core',   'Peso corporal'),
   ('Encogimiento abdominal',                           'Core',   'Peso corporal'),
   ('Escalador',                                        'Core',   'Peso corporal'),
-  ('Crunch con piernas elevadas',                      'Core',   'Peso corporal');
+  ('Crunch con piernas elevadas',                      'Core',   'Peso corporal'),
 
   -- Trapecio
   ('Encogimientos con barra',      'Trapecio', 'Barra'),
@@ -223,20 +223,11 @@ WHERE r.id <> 'aaaaaaaa-0000-0000-0000-000000000001';
 
 -- ── Asignaciones ───────────────────────────────────────────────────────────
 
+-- Laura solo tiene a Marco: el panel de entrenador sale con una fila.
 INSERT INTO assignments (routine_id, coach_id, client_id, started_on)
 VALUES
   ('aaaaaaaa-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222222',
-   '11111111-1111-1111-1111-111111111111', (current_date - 35)),
-  ('aaaaaaaa-0000-0000-0000-000000000002', '22222222-2222-2222-2222-222222222222',
-   '33333333-3333-3333-3333-333333333331', (current_date - 14)),
-  ('aaaaaaaa-0000-0000-0000-000000000003', '22222222-2222-2222-2222-222222222222',
-   '33333333-3333-3333-3333-333333333332', (current_date - 7)),
-  ('aaaaaaaa-0000-0000-0000-000000000004', '22222222-2222-2222-2222-222222222222',
-   '33333333-3333-3333-3333-333333333333', (current_date - 56)),
-  ('aaaaaaaa-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222222',
-   '33333333-3333-3333-3333-333333333334', (current_date - 3)),
-  ('aaaaaaaa-0000-0000-0000-000000000005', '22222222-2222-2222-2222-222222222222',
-   '33333333-3333-3333-3333-333333333335', (current_date - 5));
+   '11111111-1111-1111-1111-111111111111', (current_date - 35));
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- Historial: 12 semanas de entrenamientos de Marco.
@@ -321,59 +312,6 @@ BEGIN
       END LOOP;
 
       PERFORM registrar_prs(v_ses);
-    END LOOP;
-  END LOOP;
-END $$;
-
--- Algo de actividad para el resto de clientes, para que el panel de
--- entrenador muestre adherencias distintas.
-DO $$
-DECLARE
-  c        record;
-  i        int;
-  v_ses    uuid;
-  v_ini    timestamptz;
-  v_ex     record;
-BEGIN
-  FOR c IN
-    SELECT u.id, u.nombre, a.routine_id,
-           -- Calibrado para que `adherencia(user, 28)` dé los porcentajes del
-           -- diseño: 78 / 45 / 97 / 60 / 88.
-           CASE u.nombre
-             WHEN 'Nerea Gil'      THEN 19
-             WHEN 'Iván Sotomayor' THEN 5
-             WHEN 'Clara Benet'    THEN 16
-             WHEN 'Rubén Paz'      THEN 12
-             WHEN 'Alicia Roldán'  THEN 14
-           END AS n_sesiones,
-           CASE u.nombre
-             WHEN 'Iván Sotomayor' THEN 9
-             WHEN 'Rubén Paz'      THEN 4
-             WHEN 'Nerea Gil'      THEN 1
-             WHEN 'Alicia Roldán'  THEN 1
-             ELSE 0
-           END AS dias_desde_ultima
-    FROM users u
-    JOIN assignments a ON a.client_id = u.id AND a.ended_on IS NULL
-    WHERE u.role = 'alumno' AND u.id <> '11111111-1111-1111-1111-111111111111'
-  LOOP
-    FOR i IN 0..(c.n_sesiones - 1) LOOP
-      -- Repartidas por la ventana de 28 días que mira `adherencia()`.
-      v_ini := now()
-               - make_interval(days => c.dias_desde_ultima, hours => 3)
-               - make_interval(hours => (i * 24 * 27 / greatest(c.n_sesiones, 1))::int);
-
-      INSERT INTO workout_sessions (user_id, routine_id, titulo, status, started_at, ended_at)
-      VALUES (c.id, c.routine_id, 'Sesión de entrenamiento', 'terminada',
-              v_ini, v_ini + interval '55 minutes')
-      RETURNING id INTO v_ses;
-
-      FOR v_ex IN SELECT id FROM exercises ORDER BY nombre LIMIT 4 LOOP
-        INSERT INTO set_logs (session_id, exercise_id, bloque, orden, kg, reps, done_at)
-        SELECT v_ses, v_ex.id, 0, s, 40, 10, v_ini + make_interval(mins => s * 3)
-        FROM generate_series(1, 3) s
-        ON CONFLICT DO NOTHING;
-      END LOOP;
     END LOOP;
   END LOOP;
 END $$;

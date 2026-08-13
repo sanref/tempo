@@ -12,7 +12,8 @@ import {
   index,
   integer,
   numeric,
-  pgSchema,
+  pgEnum,
+  pgTable,
   smallint,
   text,
   timestamp,
@@ -20,34 +21,36 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 
-export const tempo = pgSchema("tempo");
+// Todo en `public`, sin schema propio: es donde Supabase espera las tablas.
 
-export const userRole = tempo.enum("user_role", ["alumno", "entrenador", "admin"]);
-export const muscleGroup = tempo.enum("muscle_group", [
+export const userRole = pgEnum("user_role", ["alumno", "entrenador", "admin"]);
+export const muscleGroup = pgEnum("muscle_group", [
   "Pecho",
   "Espalda",
   "Pierna",
   "Hombro",
   "Brazo",
   "Core",
+  "Trapecio",
+  "Antebrazo",
 ]);
-export const routineLevel = tempo.enum("routine_level", [
+export const routineLevel = pgEnum("routine_level", [
   "Principiante",
   "Intermedio",
   "Avanzado",
   "Todos",
 ]);
-export const routineStatus = tempo.enum("routine_status", [
+export const routineStatus = pgEnum("routine_status", [
   "activa",
   "guardada",
   "borrador",
   "plantilla",
 ]);
-export const progressionKind = tempo.enum("progression_kind", ["lineal", "doble", "manual"]);
-export const sessionStatus = tempo.enum("session_status", ["en_curso", "terminada", "abandonada"]);
-export const effortKind = tempo.enum("effort_kind", ["reps", "tiempo"]);
+export const progressionKind = pgEnum("progression_kind", ["lineal", "doble", "manual"]);
+export const sessionStatus = pgEnum("session_status", ["en_curso", "terminada", "abandonada"]);
+export const effortKind = pgEnum("effort_kind", ["reps", "tiempo"]);
 
-export const users = tempo.table(
+export const users = pgTable(
   "users",
   {
     id: uuid("id").primaryKey().defaultRandom(),
@@ -62,7 +65,7 @@ export const users = tempo.table(
   (t) => [index("users_coach_id_idx").on(t.coachId)],
 );
 
-export const exercises = tempo.table(
+export const exercises = pgTable(
   "exercises",
   {
     id: uuid("id").primaryKey().defaultRandom(),
@@ -77,7 +80,7 @@ export const exercises = tempo.table(
   (t) => [index("exercises_grupo_idx").on(t.grupo)],
 );
 
-export const routines = tempo.table(
+export const routines = pgTable(
   "routines",
   {
     id: uuid("id").primaryKey().defaultRandom(),
@@ -96,7 +99,7 @@ export const routines = tempo.table(
   (t) => [index("routines_owner_idx").on(t.ownerId, t.status)],
 );
 
-export const routineDays = tempo.table(
+export const routineDays = pgTable(
   "routine_days",
   {
     id: uuid("id").primaryKey().defaultRandom(),
@@ -120,7 +123,7 @@ export const routineDays = tempo.table(
   ],
 );
 
-export const routineExercises = tempo.table(
+export const routineExercises = pgTable(
   "routine_exercises",
   {
     id: uuid("id").primaryKey().defaultRandom(),
@@ -145,7 +148,7 @@ export const routineExercises = tempo.table(
   ],
 );
 
-export const assignments = tempo.table(
+export const assignments = pgTable(
   "assignments",
   {
     id: uuid("id").primaryKey().defaultRandom(),
@@ -165,7 +168,7 @@ export const assignments = tempo.table(
   (t) => [index("assignments_coach_idx").on(t.coachId)],
 );
 
-export const workoutSessions = tempo.table(
+export const workoutSessions = pgTable(
   "workout_sessions",
   {
     id: uuid("id").primaryKey().defaultRandom(),
@@ -183,7 +186,7 @@ export const workoutSessions = tempo.table(
   (t) => [index("sessions_user_fecha_idx").on(t.userId, t.startedAt)],
 );
 
-export const setLogs = tempo.table(
+export const setLogs = pgTable(
   "set_logs",
   {
     id: uuid("id").primaryKey().defaultRandom(),
@@ -214,7 +217,7 @@ export const setLogs = tempo.table(
   ],
 );
 
-export const personalRecords = tempo.table(
+export const personalRecords = pgTable(
   "personal_records",
   {
     id: uuid("id").primaryKey().defaultRandom(),

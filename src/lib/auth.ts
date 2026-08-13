@@ -26,7 +26,7 @@ export async function getCurrentUser(): Promise<User> {
 
   if (!user) {
     throw new Error(
-      `MOCK_USER_ID=${id} no existe en tempo.users. ¿Corriste db/02_seed.sql?`,
+      `MOCK_USER_ID=${id} no existe en la tabla users. ¿Corriste db/99_seed.sql?`,
     );
   }
   return user;

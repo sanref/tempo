@@ -27,9 +27,9 @@ function crearPool() {
     connectionString,
     max: 10,
     idleTimeoutMillis: 30_000,
-    // Todo el esquema vive en `tempo`; así las queries no llevan el prefijo
-    // a mano y las funciones (adherencia, volumen_semanal…) se resuelven solas.
-    options: "-c search_path=tempo,public",
+    // Sin `options` a propósito: todo vive en `public`, que ya es el
+    // search_path por defecto, y los pools de Supabase (pgbouncer/Supavisor)
+    // no admiten parámetros de arranque en la conexión.
   });
 }
 

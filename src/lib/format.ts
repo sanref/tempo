@@ -31,16 +31,52 @@ export function carga(cargaKg: string | null, cargaTexto: string | null): string
  * si tocás uno, tocá el otro.
  */
 
-/** '8' → 8 · '8-12' → 8 (extremo bajo) · basura → 10. Acotado por el CHECK. */
-export function repsPlanificadas(reps: string): number {
-  const n = Number(reps.match(/\d+/)?.[0] ?? 10);
+/**
+ * Los tramos de un texto de reps: la barra separa series.
+ *
+ *   '10'          → ['10']            todas las series igual
+ *   '8-12'        → ['8-12']          un rango, todas las series igual
+ *   '15/12/10/10' → ['15','12','10','10']   una serie por tramo
+ *
+ * La barra y no el guion: '8-12' ya significaba un rango antes de que
+ * existieran las series por tramo, y sobrecargar el guion volvía ambiguo si
+ * '8-12' eran dos series o un rango.
+ */
+export function tramosReps(reps: string): string[] {
+  return reps
+    .split("/")
+    .map((t) => t.trim())
+    .filter(Boolean);
+}
+
+/** Cuántas series describe el texto. Acotado por el CHECK de la columna. */
+export function seriesEnReps(reps: string): number {
+  return Math.min(8, Math.max(1, tramosReps(reps).length));
+}
+
+/** El tramo de la serie `i`. Si hay menos tramos que series, repite el último. */
+function tramo(reps: string, serie: number): string {
+  const t = tramosReps(reps);
+  if (t.length === 0) return reps;
+  return t[Math.min(Math.max(0, serie), t.length - 1)];
+}
+
+/**
+ * '8' → 8 · '8-12' → 8 (extremo bajo) · basura → 10. Acotado por el CHECK.
+ *
+ * `serie` es el índice base 0 dentro del bloque: con '15/12/10' la serie 1
+ * pide 12. Sin él se comporta como antes y devuelve el primer tramo.
+ */
+export function repsPlanificadas(reps: string, serie = 0): number {
+  const n = Number(tramo(reps, serie).match(/\d+/)?.[0] ?? 10);
   return Math.min(100, Math.max(0, Number.isFinite(n) ? n : 10));
 }
 
-/** '45 s' → 45 · '1 min' → 60 · basura → 30. */
-export function segundosPlanificados(reps: string): number {
-  const n = Number(reps.match(/\d+/)?.[0] ?? 30);
-  const factor = /min/i.test(reps) ? 60 : 1;
+/** '45 s' → 45 · '1 min' → 60 · '45 s/30 s' serie 1 → 30 · basura → 30. */
+export function segundosPlanificados(reps: string, serie = 0): number {
+  const t = tramo(reps, serie);
+  const n = Number(t.match(/\d+/)?.[0] ?? 30);
+  const factor = /min/i.test(t) ? 60 : 1;
   return Math.min(3600, Math.max(0, (Number.isFinite(n) ? n : 30) * factor));
 }
 

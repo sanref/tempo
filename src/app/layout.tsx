@@ -4,9 +4,7 @@ import { Archivo } from "next/font/google";
 import "./design-system.css";
 import "./app.css";
 
-import { SiteHeader } from "@/components/site-header";
 import { SwRegister } from "@/components/sw-register";
-import { TabBar } from "@/components/tab-bar";
 
 const archivo = Archivo({
   subsets: ["latin"],
@@ -31,13 +29,20 @@ export const viewport: Viewport = {
   maximumScale: 1,
 };
 
+/**
+ * Solo el documento: fuentes, estilos y el registro del service worker.
+ *
+ * Aquí no se lee la sesión a propósito. Tocar cookies en el layout raíz vuelve
+ * dinámica *toda* la app, y con ella /offline — que es la pantalla que el
+ * service worker sirve cuando no hay red, y no puede depender ni de la base ni
+ * de que el servidor conteste. La cabecera y las pestañas viven en el layout
+ * del grupo (app), que sí exige sesión.
+ */
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="es" className={archivo.variable}>
       <body>
-        <SiteHeader />
-        <div className="app-shell">{children}</div>
-        <TabBar />
+        {children}
         <SwRegister />
       </body>
     </html>

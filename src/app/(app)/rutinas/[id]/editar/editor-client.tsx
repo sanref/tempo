@@ -5,20 +5,29 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
 
-import {
-  anadirEjercicio,
-  borrarDia,
-  crearDia,
-  guardarDia,
-  quitarEjercicio,
-  reordenarEjercicios,
-} from "@/app/actions";
+import { guardarRutina } from "@/app/actions";
 import { ExerciseForm } from "@/components/exercise-form";
-import { kg } from "@/lib/format";
+import { kg, seriesEnReps, tramosReps } from "@/lib/format";
 import type { DiaConEjercicios } from "@/db/queries";
 
 /** Prescripción editable de un ejercicio dentro del día. */
 type Presc = { series: number; tipo: "reps" | "tiempo"; reps: string; carga: string };
+
+/**
+ * Lo mismo que trae la base, más lo que el editor necesita para llevar la
+ * cuenta de lo que todavía no existe allí.
+ *
+ * `nuevo` marca lo que hay que insertar al guardar; `notas` vive aquí porque
+ * el editor las edita por día y `DiaConEjercicios` no las trae.
+ */
+type EjercicioEditable = DiaConEjercicios["ejercicios"][number] & { nuevo?: boolean };
+type DiaEditable = Omit<DiaConEjercicios, "ejercicios"> & {
+  ejercicios: EjercicioEditable[];
+  nuevo?: boolean;
+  notas: string;
+};
+
+const LETRAS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 /** Del registro de la base al campo único de carga que ve el entrenador. */
 const cargaInicial = (e: DiaConEjercicios["ejercicios"][number]) =>
@@ -51,17 +60,18 @@ export type EjercicioCatalogo = {
 /**
  * ── Editor de rutinas ──────────────────────────────────────────────────────
  *
- * Dos velocidades a propósito:
+ * Nada se escribe hasta "Guardar". Añadir y quitar ejercicios, crear y borrar
+ * días, reordenar y ajustar: todo se acumula en `dias` y sale de una vez, en
+ * una transacción. Así "Cancelar" significa lo que dice.
  *
- *   · Estructura (añadir y quitar ejercicios, crear y borrar días) va al
- *     servidor en el acto. Necesita los ids que genera la base y son cambios
- *     que el usuario entiende como definitivos.
- *   · Ajustes (nombre, orden, series, descanso, progresión, notas) se editan
- *     en local y se mandan con "Guardar".
+ * Antes la estructura iba al servidor en el acto, porque hacían falta los ids
+ * que genera la base. Ya no: los pone el cliente con `crypto.randomUUID()` —
+ * las columnas son uuid y aceptan uno hecho — y el editor puede indexar su
+ * estado local sin haber hablado con el servidor.
  *
- * Por eso `dias` vive en estado: tras una mutación de estructura el editor se
- * actualiza con lo que devuelve la acción, sin recargar la página y sin perder
- * lo que hubiera a medio ajustar.
+ * Todo el estado editable vive dentro de `dias`, no en variables sueltas por
+ * día: si el descanso o el orden colgaran del día abierto, cambiar de pestaña
+ * y volver los perdería.
  */
 export function EditorClient({
   routineId,
@@ -83,134 +93,165 @@ export function EditorClient({
   const router = useRouter();
   const [guardando, iniciarGuardado] = useTransition();
 
-  const [dias, setDias] = useState(diasIniciales);
+  const [dias, setDias] = useState<DiaEditable[]>(() =>
+    diasIniciales.map((d) => ({ ...d, notas: "" })),
+  );
   const [nombre, setNombre] = useState(nombreInicial);
   const [i, setI] = useState(0);
   const dia = dias[i];
 
-  const [orden, setOrden] = useState<string[]>(diasIniciales[0]?.ejercicios.map((e) => e.id) ?? []);
   const [presc, setPresc] = useState<Record<string, Presc>>(
     Object.fromEntries(diasIniciales.flatMap((d) => d.ejercicios.map((e) => [e.id, prescDe(e)]))),
   );
-  const [descanso, setDescanso] = useState(diasIniciales[0]?.descansoDefectoS ?? 90);
-  const [progresion, setProgresion] = useState<"lineal" | "doble" | "manual">(
-    diasIniciales[0]?.progresion ?? "lineal",
-  );
-  const [notas, setNotas] = useState("");
+  // Lo que hay que borrar en el servidor al guardar. Lo que se añadió y se
+  // quitó sin llegar a guardarse no entra: nunca existió allí.
+  const [borradosEj, setBorradosEj] = useState<string[]>([]);
+  const [borradosDias, setBorradosDias] = useState<string[]>([]);
   const [arrastrado, setArrastrado] = useState<string | null>(null);
 
   const [catalogo, setCatalogo] = useState(catalogoInicial);
   const [modal, setModal] = useState<null | "biblioteca" | "borrar-dia">(null);
   const [modoPicker, setModoPicker] = useState<"lista" | "nuevo">("lista");
   const [busqueda, setBusqueda] = useState("");
-  const [procesando, setProcesando] = useState(false);
   const [fallo, setFallo] = useState<string | null>(null);
 
-  /** Envoltorio de las mutaciones de estructura: bloquea y cuenta el fallo. */
-  const mutar = async (fn: () => Promise<void>) => {
-    setProcesando(true);
-    setFallo(null);
-    try {
-      await fn();
-    } catch (e) {
-      setFallo(e instanceof Error ? e.message : "No se pudo aplicar el cambio.");
-    } finally {
-      setProcesando(false);
-    }
+  /** Hay algo sin guardar: lo usa el aviso al salir. */
+  const sucio =
+    borradosEj.length > 0 ||
+    borradosDias.length > 0 ||
+    dias.some((d) => d.nuevo || d.ejercicios.some((e) => e.nuevo));
+
+  /** Reemplaza el día abierto. Todo el estado editable vive dentro de él. */
+  const cambiarDia = (cambio: Partial<DiaEditable>) =>
+    setDias((ds) => ds.map((d, idx) => (idx === i ? { ...d, ...cambio } : d)));
+
+  // ── Estructura (local hasta "Guardar") ───────────────────────────────────
+
+  const agregarEjercicio = (fuente: EjercicioCatalogo) => {
+    if (!dia) return;
+    const nuevo: EjercicioEditable = {
+      id: crypto.randomUUID(),
+      exerciseId: fuente.id,
+      orden: dia.ejercicios.length,
+      nombre: fuente.nombre,
+      equipo: fuente.equipo,
+      series: 3,
+      tipo: "reps",
+      reps: "10",
+      cargaKg: null,
+      cargaTexto: null,
+      descansoS: null,
+      nuevo: true,
+    };
+    cambiarDia({ ejercicios: [...dia.ejercicios, nuevo] });
+    setPresc((p) => ({ ...p, [nuevo.id]: prescDe(nuevo) }));
   };
 
-  /** Coloca el editor sobre un día: su orden y sus ajustes. */
-  const abrirDia = (idx: number, lista = dias) => {
-    const d = lista[idx];
-    setI(idx);
-    setOrden(d?.ejercicios.map((e) => e.id) ?? []);
-    setDescanso(d?.descansoDefectoS ?? 90);
-    setProgresion(d?.progresion ?? "lineal");
-    setNotas("");
+  const eliminarEjercicio = (id: string) => {
+    if (!dia) return;
+    const e = dia.ejercicios.find((x) => x.id === id);
+    if (e && !e.nuevo) setBorradosEj((b) => [...b, id]);
+    cambiarDia({ ejercicios: dia.ejercicios.filter((x) => x.id !== id) });
   };
 
-  // ── Estructura ───────────────────────────────────────────────────────────
+  const agregarDia = () => {
+    const usados = new Set(dias.map((d) => d.codigo));
+    const codigo = [...LETRAS].find((l) => !usados.has(l)) ?? `D${dias.length + 1}`;
+    const nombreDia = `Día ${dias.length + 1}`;
 
-  const agregarEjercicio = (exerciseId: string) =>
-    mutar(async () => {
-      if (!dia) return;
-      const nuevo = await anadirEjercicio(dia.id, exerciseId);
-      setDias((ds) =>
-        ds.map((d) => (d.id === dia.id ? { ...d, ejercicios: [...d.ejercicios, nuevo] } : d)),
-      );
-      setOrden((o) => [...o, nuevo.id]);
-      setPresc((p) => ({ ...p, [nuevo.id]: prescDe(nuevo) }));
-    });
+    const nuevo: DiaEditable = {
+      id: crypto.randomUUID(),
+      codigo,
+      nombre: nombreDia,
+      titulo: `Día ${codigo} — ${nombreDia}`,
+      subtitulo: "",
+      duracionMin: null,
+      descansoDefectoS: 90,
+      progresion: "lineal",
+      notas: "",
+      ejercicios: [],
+      nuevo: true,
+    };
+    setDias([...dias, nuevo]);
+    setI(dias.length);
+  };
 
-  const eliminarEjercicio = (id: string) =>
-    mutar(async () => {
-      if (!dia) return;
-      await quitarEjercicio(id);
-      setDias((ds) =>
-        ds.map((d) =>
-          d.id === dia.id ? { ...d, ejercicios: d.ejercicios.filter((e) => e.id !== id) } : d,
-        ),
-      );
-      setOrden((o) => o.filter((x) => x !== id));
-    });
-
-  const agregarDia = () =>
-    mutar(async () => {
-      const nuevo = await crearDia(routineId);
-      const lista = [...dias, nuevo];
-      setDias(lista);
-      abrirDia(lista.length - 1, lista);
-    });
-
-  const eliminarDia = () =>
-    mutar(async () => {
-      if (!dia) return;
-      await borrarDia(dia.id);
-      const lista = dias.filter((d) => d.id !== dia.id);
-      setDias(lista);
-      abrirDia(Math.max(0, Math.min(i, lista.length - 1)), lista);
-      setModal(null);
-    });
+  const eliminarDia = () => {
+    if (!dia) return;
+    if (!dia.nuevo) setBorradosDias((b) => [...b, dia.id]);
+    const lista = dias.filter((d) => d.id !== dia.id);
+    setDias(lista);
+    setI(Math.max(0, Math.min(i, lista.length - 1)));
+    setModal(null);
+  };
 
   // ── Orden ────────────────────────────────────────────────────────────────
+  // El orden ES el orden del array; no hay una lista de ids aparte que pueda
+  // desincronizarse de los ejercicios.
 
   const mover = (id: string, delta: number) => {
-    setOrden((o) => {
-      const from = o.indexOf(id);
-      const to = from + delta;
-      if (from < 0 || to < 0 || to >= o.length) return o;
-      const copia = [...o];
-      copia.splice(to, 0, ...copia.splice(from, 1));
-      return copia;
-    });
+    if (!dia) return;
+    const from = dia.ejercicios.findIndex((e) => e.id === id);
+    const to = from + delta;
+    if (from < 0 || to < 0 || to >= dia.ejercicios.length) return;
+    const copia = [...dia.ejercicios];
+    copia.splice(to, 0, ...copia.splice(from, 1));
+    cambiarDia({ ejercicios: copia });
   };
 
   const soltarSobre = (id: string) => {
-    if (!arrastrado || arrastrado === id) return;
-    setOrden((o) => {
-      const copia = o.filter((x) => x !== arrastrado);
-      copia.splice(o.indexOf(id), 0, arrastrado);
-      return copia;
-    });
+    if (!dia || !arrastrado || arrastrado === id) return;
+    const copia = dia.ejercicios.filter((e) => e.id !== arrastrado);
+    const movido = dia.ejercicios.find((e) => e.id === arrastrado);
+    if (movido) copia.splice(copia.findIndex((e) => e.id === id), 0, movido);
+    cambiarDia({ ejercicios: copia });
     setArrastrado(null);
   };
 
   const guardar = () => {
+    setFallo(null);
     iniciarGuardado(async () => {
-      if (dia) await reordenarEjercicios(dia.id, orden);
-      await guardarDia({
-        routineId,
-        routineDayId: dia?.id,
-        nombreRutina: nombre,
-        descansoDefectoS: descanso,
-        progresion,
-        notas,
-        series: orden.map((id) => {
-          const p = presc[id] ?? { series: 3, tipo: "reps" as const, reps: "10", carga: "" };
-          return { id, series: p.series, tipo: p.tipo, reps: p.reps, carga: p.carga };
-        }),
-      });
+      try {
+        await guardarRutina({
+          routineId,
+          nombreRutina: nombre,
+          diasBorrados: borradosDias,
+          ejerciciosBorrados: borradosEj,
+          dias: dias.map((d) => ({
+            id: d.id,
+            nuevo: Boolean(d.nuevo),
+            codigo: d.codigo,
+            nombre: d.nombre,
+            titulo: d.titulo,
+            subtitulo: d.subtitulo,
+            descansoDefectoS: d.descansoDefectoS,
+            progresion: d.progresion,
+            notas: d.notas,
+            ejercicios: d.ejercicios.map((e) => {
+              const p = presc[e.id] ?? prescDe(e);
+              return {
+                id: e.id,
+                nuevo: Boolean(e.nuevo),
+                exerciseId: e.exerciseId,
+                series: p.series,
+                tipo: p.tipo,
+                reps: p.reps,
+                carga: p.carga,
+              };
+            }),
+          })),
+        });
+        router.push(`/rutinas/${routineId}`);
+      } catch (e) {
+        setFallo(e instanceof Error ? e.message : "No se pudo guardar.");
+      }
     });
+  };
+
+  /** "Cancelar" ya no escribió nada: solo hay que avisar de lo que se pierde. */
+  const cancelar = () => {
+    if (sucio && !window.confirm("Se van a descartar los cambios sin guardar. ¿Salir?")) return;
+    router.push(`/rutinas/${routineId}`);
   };
 
   /** Cambio puntual de la prescripción de un ejercicio. */
@@ -220,10 +261,22 @@ export function EditorClient({
       [id]: { ...(p[id] ?? { series: 3, tipo: "reps", reps: "10", carga: "" }), ...cambio },
     }));
 
+  /**
+   * El texto de reps, y con él el contador de series si describe varias.
+   *
+   * Escribir "15/12/10/10" pone el contador en 4 solo. Es lo que hace que la
+   * sintaxis se explique al usarla: no hay que saberla de antemano, se ve el
+   * efecto. Un valor único no toca el contador — "10" con 4 series sigue
+   * siendo 4×10.
+   */
+  const ajustarReps = (id: string, texto: string) => {
+    const tramos = tramosReps(texto).length;
+    ajustar(id, tramos > 1 ? { reps: texto, series: seriesEnReps(texto) } : { reps: texto });
+  };
+
   // ── Derivados ────────────────────────────────────────────────────────────
 
-  const porId = new Map(dia?.ejercicios.map((e) => [e.id, e]) ?? []);
-  const lista = orden.map((id) => porId.get(id)).filter((e) => e !== undefined);
+  const lista = dia?.ejercicios ?? [];
 
   const yaEnElDia = useMemo(
     () => new Set(dia?.ejercicios.map((e) => e.exerciseId) ?? []),
@@ -257,7 +310,7 @@ export function EditorClient({
           />
         </div>
         <div style={{ display: "flex", gap: 10 }}>
-          <button className="btn btn-secondary" onClick={() => router.push(`/rutinas/${routineId}`)}>
+          <button className="btn btn-secondary" onClick={cancelar}>
             Cancelar
           </button>
           <button className="btn btn-primary" onClick={guardar} disabled={guardando}>
@@ -274,12 +327,12 @@ export function EditorClient({
             key={d.id}
             className="day-tab"
             data-active={idx === i}
-            onClick={() => abrirDia(idx)}
+            onClick={() => setI(idx)}
           >
             {d.codigo} · {d.nombre}
           </button>
         ))}
-        <button className="day-tab" onClick={agregarDia} disabled={procesando}>
+        <button className="day-tab" onClick={agregarDia}>
           + Día
         </button>
       </div>
@@ -354,8 +407,12 @@ export function EditorClient({
                     <input
                       className="input"
                       value={presc[e.id]?.reps ?? e.reps}
-                      onChange={(ev) => ajustar(e.id, { reps: ev.target.value })}
-                      placeholder={(presc[e.id]?.tipo ?? e.tipo) === "tiempo" ? "45 s" : "8-12"}
+                      onChange={(ev) => ajustarReps(e.id, ev.target.value)}
+                      placeholder={
+                        (presc[e.id]?.tipo ?? e.tipo) === "tiempo"
+                          ? "45 s · 45 s/30 s"
+                          : "10 · 8-12 · 15/12/10/10"
+                      }
                       aria-label={
                         (presc[e.id]?.tipo ?? e.tipo) === "tiempo"
                           ? `Tiempo por serie de ${e.nombre}`
@@ -401,8 +458,7 @@ export function EditorClient({
                   <button
                     className="row-remove"
                     aria-label={`Quitar ${e.nombre} del día`}
-                    disabled={procesando}
-                    onClick={() => void eliminarEjercicio(e.id)}
+                    onClick={() => eliminarEjercicio(e.id)}
                   >
                     <X size={14} strokeWidth={3} />
                   </button>
@@ -413,7 +469,6 @@ export function EditorClient({
             <button
               className="btn btn-secondary btn-block"
               onClick={() => setModal("biblioteca")}
-              disabled={procesando}
             >
               <Plus size={14} strokeWidth={3} /> Añadir ejercicio desde la biblioteca
             </button>
@@ -430,8 +485,8 @@ export function EditorClient({
                     <input
                       type="radio"
                       name="rest"
-                      checked={descanso === d}
-                      onChange={() => setDescanso(d)}
+                      checked={dia.descansoDefectoS === d}
+                      onChange={() => cambiarDia({ descansoDefectoS: d })}
                     />
                     <span>{d} s</span>
                   </label>
@@ -447,8 +502,8 @@ export function EditorClient({
                     <input
                       type="radio"
                       name="prog"
-                      checked={progresion === p.valor}
-                      onChange={() => setProgresion(p.valor)}
+                      checked={dia.progresion === p.valor}
+                      onChange={() => cambiarDia({ progresion: p.valor })}
                     />
                     <span className="dot" />
                     {p.label}
@@ -461,8 +516,8 @@ export function EditorClient({
               <label>Notas para el alumno</label>
               <textarea
                 className="input"
-                value={notas}
-                onChange={(e) => setNotas(e.target.value)}
+                value={dia.notas}
+                onChange={(e) => cambiarDia({ notas: e.target.value })}
                 placeholder="Controla la bajada en 3 s y para a un dedo del pecho."
               />
             </div>
@@ -476,7 +531,6 @@ export function EditorClient({
               className="btn btn-ghost"
               style={{ marginTop: 16 }}
               onClick={() => setModal("borrar-dia")}
-              disabled={procesando}
             >
               <Trash2 size={14} /> Borrar este día
             </button>
@@ -511,11 +565,11 @@ export function EditorClient({
                 nombreInicial={busqueda.trim()}
                 textoEnvio="Crear y añadir"
                 onCancelar={() => setModoPicker("lista")}
-                onGuardado={async (creado) => {
+                onGuardado={(creado) => {
                   setCatalogo((c) => [...c, creado]);
                   setModoPicker("lista");
                   setBusqueda("");
-                  await agregarEjercicio(creado.id);
+                  agregarEjercicio(creado);
                 }}
               />
             ) : (
@@ -540,8 +594,8 @@ export function EditorClient({
                         <button
                           className="picker-row"
                           key={e.id}
-                          disabled={puesto || procesando}
-                          onClick={() => void agregarEjercicio(e.id)}
+                          disabled={puesto}
+                          onClick={() => agregarEjercicio(e)}
                         >
                           <span>
                             <strong>{e.nombre}</strong>
@@ -600,10 +654,9 @@ export function EditorClient({
               </button>
               <button
                 className="btn btn-primary"
-                onClick={() => void eliminarDia()}
-                disabled={procesando}
+                onClick={eliminarDia}
               >
-                {procesando ? "Borrando…" : "Borrar día"}
+                Borrar día
               </button>
             </div>
           </div>

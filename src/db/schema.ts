@@ -61,8 +61,12 @@ export const users = pgTable(
     avatarUrl: text("avatar_url"),
     activo: boolean("activo").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    // Identidad en auth.users. Sin FK: `auth` es de Supabase y una clave ajena
+    // contra su tabla ata el esquema a su ciclo de vida. El vínculo lo mantiene
+    // el trigger `on_auth_user_created`.
+    authId: uuid("auth_id").unique(),
   },
-  (t) => [index("users_coach_id_idx").on(t.coachId)],
+  (t) => [index("users_coach_id_idx").on(t.coachId), index("users_auth_id_idx").on(t.authId)],
 );
 
 export const exercises = pgTable(
@@ -155,9 +159,9 @@ export const assignments = pgTable(
     routineId: uuid("routine_id")
       .notNull()
       .references(() => routines.id, { onDelete: "cascade" }),
-    coachId: uuid("coach_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
+    // NULL = se lo asignó el propio alumno. Ver el CHECK
+    // `assignments_coach_no_self` en db/01_schema.sql.
+    coachId: uuid("coach_id").references(() => users.id, { onDelete: "cascade" }),
     clientId: uuid("client_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
@@ -166,6 +170,23 @@ export const assignments = pgTable(
     notas: text("notas").notNull().default(""),
   },
   (t) => [index("assignments_coach_idx").on(t.coachId)],
+);
+
+/** Cómo se rellena `users.coach_id`: el entrenador genera, el alumno canjea. */
+export const coachInvites = pgTable(
+  "coach_invites",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    codigo: text("codigo").notNull().unique(),
+    coachId: uuid("coach_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    usedBy: uuid("used_by").references(() => users.id, { onDelete: "set null" }),
+  },
+  (t) => [index("coach_invites_coach_idx").on(t.coachId, t.createdAt)],
 );
 
 export const workoutSessions = pgTable(

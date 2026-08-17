@@ -1,10 +1,18 @@
 import Link from "next/link";
 
-import { getClientes, getResumenCoach, getRutinasAsignables } from "@/db/queries";
-import { getCurrentUser } from "@/lib/auth";
+import {
+  getClientes,
+  getInvitaciones,
+  getResumenCoach,
+  getRutinasAsignables,
+} from "@/db/queries";
+import { esEntrenador, getCoach, getCurrentUser } from "@/lib/auth";
 import { desde } from "@/lib/format";
 
 import { AsignarRutina } from "./asignar-rutina";
+import { Canjear } from "./canjear";
+import { DesvincularAlumno } from "./desvincular-alumno";
+import { Invitaciones } from "./invitaciones";
 
 export const dynamic = "force-dynamic";
 
@@ -15,10 +23,12 @@ export default async function CoachPage() {
   const user = await getCurrentUser();
 
   // El alumno ve el panel de su propio entrenador; el entrenador, el suyo.
-  const coachId = user.role === "alumno" ? user.coachId : user.id;
+  const coachId = esEntrenador(user) ? user.id : user.coachId;
 
+  // Un alumno suelto no se queda en un callejón: acá canjea el código que le
+  // pasó su entrenador, que es lo único que escribe `users.coach_id`.
   if (!coachId) {
-    return <p className="empty">No tenés entrenador asignado.</p>;
+    return <Canjear tieneCoach={false} />;
   }
 
   const [clientes, resumen, rutinas] = await Promise.all([
@@ -27,9 +37,15 @@ export default async function CoachPage() {
     getRutinasAsignables(coachId),
   ]);
 
-  // Asignar es cosa del entrenador: el alumno ve el panel de solo lectura.
-  const puedeAsignar = user.role !== "alumno";
+  // Asignar e invitar son cosa del entrenador: el alumno ve el panel de solo
+  // lectura del suyo.
+  const puedeAsignar = esEntrenador(user);
+  const invitaciones = puedeAsignar ? await getInvitaciones(user.id) : [];
   const alumnos = clientes.map((c) => ({ id: c.id, nombre: c.nombre, plan: c.plan }));
+
+  // Para el pie del alumno: a quién deja y si al irse pierde algo de vista.
+  const miCoach = puedeAsignar ? null : await getCoach(user);
+  const miPlan = puedeAsignar ? false : Boolean(clientes.find((c) => c.id === user.id)?.routineId);
 
   return (
     <div>
@@ -50,6 +66,13 @@ export default async function CoachPage() {
         )}
       </div>
 
+      {clientes.length === 0 ? (
+        <p className="empty">
+          {puedeAsignar
+            ? "Todavía no tenés alumnos. Generá un código abajo y pasáselo a quien quieras sumar."
+            : "Tu entrenador todavía no tiene alumnos registrados."}
+        </p>
+      ) : (
       <div style={{ padding: 20 }} className="table-scroll">
         <table className="table">
           <thead>
@@ -89,13 +112,19 @@ export default async function CoachPage() {
                         </Link>
                       )}
                       {puedeAsignar && (
-                        <AsignarRutina
-                          alumnos={alumnos}
-                          rutinas={rutinas}
-                          alumnoFijo={{ id: c.id, nombre: c.nombre, plan: c.plan }}
-                          etiqueta={c.routineId ? "Cambiar" : "Asignar"}
-                          variante="btn-ghost"
-                        />
+                        <>
+                          <AsignarRutina
+                            alumnos={alumnos}
+                            rutinas={rutinas}
+                            alumnoFijo={{ id: c.id, nombre: c.nombre, plan: c.plan }}
+                            etiqueta={c.routineId ? "Cambiar" : "Asignar"}
+                            variante="btn-ghost"
+                          />
+                          <DesvincularAlumno
+                            alumno={{ id: c.id, nombre: c.nombre }}
+                            tienePlan={Boolean(c.routineId)}
+                          />
+                        </>
                       )}
                       {!c.routineId && !puedeAsignar && <span className="text-muted">—</span>}
                     </span>
@@ -106,6 +135,13 @@ export default async function CoachPage() {
           </tbody>
         </table>
       </div>
+      )}
+
+      {puedeAsignar ? (
+        <Invitaciones invitaciones={invitaciones} />
+      ) : (
+        <Canjear tieneCoach coachNombre={miCoach?.nombre} tienePlan={miPlan} />
+      )}
     </div>
   );
 }

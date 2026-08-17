@@ -33,9 +33,13 @@ CREATE TYPE session_status   AS ENUM ('en_curso', 'terminada', 'abandonada');
 CREATE TYPE effort_kind      AS ENUM ('reps', 'tiempo');
 
 -- ── Usuarios ───────────────────────────────────────────────────────────────
--- Sin columnas de credenciales: la autenticación se resuelve fuera (Better
--- Auth / Supabase) y aquí solo vive el perfil. Cuando se enchufe el proveedor,
--- añadir `auth_id text UNIQUE` apuntando a su tabla de identidades.
+-- Sin columnas de credenciales: quien las guarda es Supabase Auth, en su
+-- schema `auth`, y aquí solo vive el perfil. `auth_id` es el puente entre los
+-- dos: lo rellena el trigger `on_auth_user_created` (ver el final del archivo).
+--
+-- Sin clave ajena contra auth.users a propósito — `auth` es de Supabase, y
+-- atar el esquema a su ciclo de vida hace que este archivo deje de correr en
+-- un Postgres pelado.
 
 CREATE TABLE users (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -45,11 +49,14 @@ CREATE TABLE users (
   coach_id    uuid REFERENCES users (id) ON DELETE SET NULL,
   avatar_url  text,
   activo      boolean NOT NULL DEFAULT true,
+  auth_id     uuid UNIQUE,
   created_at  timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT users_coach_no_self CHECK (coach_id IS DISTINCT FROM id)
 );
 
 CREATE INDEX users_coach_id_idx ON users (coach_id) WHERE coach_id IS NOT NULL;
+-- Se busca por aquí en cada petición: es como la sesión se traduce a un perfil.
+CREATE INDEX users_auth_id_idx ON users (auth_id);
 
 -- ── Catálogo de ejercicios ─────────────────────────────────────────────────
 -- Catálogo separado desde el día uno: sin esto no hay forma de responder
@@ -141,39 +148,96 @@ CREATE INDEX routine_exercises_exercise_idx ON routine_exercises (exercise_id);
 -- Un rango se resuelve por el extremo bajo: es lo que la mayoría registra y
 -- deja margen para subir. Un `regexp_replace` de todo lo que no sea dígito
 -- convertiría '8-12' en 812, que además viola el CHECK de set_logs.reps.
-CREATE FUNCTION reps_planificadas(p_reps text) RETURNS smallint
+/* El tramo que le toca a una serie. La barra separa series:
+
+     '10'          → todas las series a 10
+     '8-12'        → un rango, todas las series
+     '15/12/10/10' → 15, 12, 10 y 10
+
+   La barra y no el guion: '8-12' ya significaba un rango —es lo que lee la
+   progresión doble— y sobrecargar el guion lo volvía ambiguo.
+
+   Si hay menos tramos que series se repite el último. Los arrays de Postgres
+   empiezan en 1 y `p_serie` viene en base 0, de ahí el +1. */
+CREATE FUNCTION tramo_reps(p_reps text, p_serie int DEFAULT 0) RETURNS text
+LANGUAGE sql IMMUTABLE AS $$
+  WITH partes AS (
+    SELECT array(
+      SELECT btrim(x)
+      FROM unnest(string_to_array(coalesce(p_reps, ''), '/')) AS x
+      WHERE btrim(x) <> ''
+    ) AS t
+  )
+  SELECT CASE
+           WHEN cardinality(t) = 0 THEN coalesce(p_reps, '')
+           ELSE t[least(greatest(coalesce(p_serie, 0), 0), cardinality(t) - 1) + 1]
+         END
+  FROM partes;
+$$;
+
+CREATE FUNCTION reps_planificadas(p_reps text, p_serie int DEFAULT 0) RETURNS smallint
 LANGUAGE sql IMMUTABLE AS $$
   SELECT least(100, greatest(0,
-    coalesce((regexp_match(coalesce(p_reps, ''), '\d+'))[1]::int, 10)
+    coalesce((regexp_match(tramo_reps(p_reps, p_serie), '\d+'))[1]::int, 10)
   ))::smallint;
 $$;
 
 -- '45 s' → 45 · '1 min' → 60 · '' → 30. Solo para bloques de tipo 'tiempo'.
-CREATE FUNCTION segundos_planificados(p_reps text) RETURNS smallint
+CREATE FUNCTION segundos_planificados(p_reps text, p_serie int DEFAULT 0) RETURNS smallint
 LANGUAGE sql IMMUTABLE AS $$
   SELECT least(3600, greatest(0,
-    coalesce((regexp_match(coalesce(p_reps, ''), '\d+'))[1]::int, 30)
-    * CASE WHEN coalesce(p_reps, '') ~* 'min' THEN 60 ELSE 1 END
+    coalesce((regexp_match(tramo_reps(p_reps, p_serie), '\d+'))[1]::int, 30)
+    * CASE WHEN tramo_reps(p_reps, p_serie) ~* 'min' THEN 60 ELSE 1 END
   ))::smallint;
 $$;
 
 -- ── Asignaciones entrenador → alumno ───────────────────────────────────────
 
+-- Qué plan sigue cada alumno. Fuente única de verdad: de aquí salen el próximo
+-- día, la adherencia y la semana en curso.
+--
+-- `coach_id` NULL significa exactamente una cosa: **se lo asignó él mismo**. Un
+-- plan propio no se marca poniéndose uno de entrenador — si se admitieran las
+-- dos formas, `getPlanActivo()` tendría que distinguirlas y el panel de
+-- entrenador contaría gente como alumna de sí misma. De ahí el CHECK.
 CREATE TABLE assignments (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   routine_id  uuid NOT NULL REFERENCES routines (id) ON DELETE CASCADE,
-  coach_id    uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  coach_id    uuid REFERENCES users (id) ON DELETE CASCADE,
   client_id   uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,
   started_on  date NOT NULL DEFAULT current_date,
   ended_on    date,
   notas       text NOT NULL DEFAULT '',
-  CONSTRAINT assignments_rango CHECK (ended_on IS NULL OR ended_on >= started_on)
+  CONSTRAINT assignments_rango CHECK (ended_on IS NULL OR ended_on >= started_on),
+  CONSTRAINT assignments_coach_no_self CHECK (coach_id IS DISTINCT FROM client_id)
 );
 
 -- Un alumno solo puede tener una asignación viva de la misma rutina.
 CREATE UNIQUE INDEX assignments_activa_key
   ON assignments (client_id, routine_id) WHERE ended_on IS NULL;
 CREATE INDEX assignments_coach_idx ON assignments (coach_id) WHERE ended_on IS NULL;
+
+-- ── Invitaciones de entrenador ─────────────────────────────────────────────
+-- Cómo se rellena `users.coach_id`. El vínculo lo hacen las dos partes: el
+-- entrenador genera un código y el alumno lo canjea, así que nadie acaba con
+-- entrenador sin haber escrito nada.
+
+CREATE TABLE coach_invites (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  -- Sin guiones ni minúsculas: se normaliza al generar y al canjear, para que
+  -- dé igual cómo lo teclee quien lo recibe.
+  codigo      text NOT NULL UNIQUE CHECK (codigo ~ '^[A-Z0-9]{6,16}$'),
+  coach_id    uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  expires_at  timestamptz NOT NULL,
+  used_at     timestamptz,
+  used_by     uuid REFERENCES users (id) ON DELETE SET NULL,
+  -- Un código usado tiene las dos columnas puestas o ninguna. Sin esto, un
+  -- `used_at` suelto dejaría el código quemado sin saber quién lo gastó.
+  CONSTRAINT coach_invites_uso_completo CHECK ((used_at IS NULL) = (used_by IS NULL))
+);
+
+CREATE INDEX coach_invites_coach_idx ON coach_invites (coach_id, created_at DESC);
 
 -- ── Sesiones de entrenamiento ──────────────────────────────────────────────
 
@@ -392,13 +456,17 @@ CREATE TRIGGER routines_touch
 -- Row Level Security
 -- ═══════════════════════════════════════════════════════════════════════════
 -- En Supabase, `public` es el schema que publica PostgREST: cualquiera con la
--- clave anónima —que viaja en el navegador— puede leer y escribir sus tablas.
--- Vivir en un schema aparte tapaba eso sin querer; aquí hay que decirlo.
+-- clave publicable —que viaja en el navegador— puede leer y escribir sus
+-- tablas. Vivir en un schema aparte tapaba eso sin querer; aquí hay que decirlo.
 --
--- RLS activada y sin políticas = nadie pasa por esa puerta. La app no se
--- entera: entra por DATABASE_URL con el rol dueño de las tablas, y el dueño
--- salta RLS mientras no se use FORCE ROW LEVEL SECURITY. Cuando haya auth de
--- verdad (users.auth_id), las políticas por usuario van justo aquí.
+-- Activar RLS deja la puerta cerrada. Las políticas que la abren, usuario a
+-- usuario, están al final del archivo: dependen de `auth.uid()`, así que no
+-- pueden escribirse hasta tener el schema `auth` delante.
+--
+-- El web no depende de ellas: entra por DATABASE_URL con el rol dueño de las
+-- tablas, y el dueño salta RLS mientras no se use FORCE ROW LEVEL SECURITY.
+-- Quien sí depende es tempo_mobile, que entra por PostgREST con la clave
+-- publicable. Si las políticas desaparecen, el móvil deja de ver sus datos.
 
 ALTER TABLE users             ENABLE ROW LEVEL SECURITY;
 ALTER TABLE exercises         ENABLE ROW LEVEL SECURITY;
@@ -406,6 +474,7 @@ ALTER TABLE routines          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE routine_days      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE routine_exercises ENABLE ROW LEVEL SECURITY;
 ALTER TABLE assignments       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE coach_invites     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE workout_sessions  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE set_logs          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE personal_records  ENABLE ROW LEVEL SECURITY;
@@ -421,4 +490,217 @@ BEGIN
   ELSE
     RAISE NOTICE 'PG14: session_summaries se queda sin security_invoker.';
   END IF;
+END $$;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- Supabase Auth
+-- ═══════════════════════════════════════════════════════════════════════════
+-- El puente entre la identidad (auth.users) y el perfil (public.users), y las
+-- políticas que dejan entrar al móvil.
+--
+-- Esto mismo, en forma de migración para una base que ya tiene datos, está en
+-- db/04_auth.sql. Si tocás uno, tocá el otro.
+--
+-- Los RPC que usa el móvil (empezar_sesion, guardar_series, get_resumen_semana…)
+-- viven en tempo_mobile/supabase/migrations/01_mobile_auth_and_rls.sql.
+
+-- ── Trigger y políticas ────────────────────────────────────────────────────
+-- Todo esto depende del schema `auth`, que en un Postgres local no existe: si
+-- falta, se salta entero y la base de desarrollo levanta igual (sin login).
+
+DO $$
+BEGIN
+IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'auth') THEN
+  RAISE NOTICE 'Sin schema `auth` (Postgres local): me salto trigger y políticas.';
+  RETURN;
+END IF;
+
+-- Perfil automático al registrarse. Lee `raw_user_meta_data`, que es lo que
+-- manda el cliente en options.data del signUp.
+--
+-- El ON CONFLICT es lo que permite que una fila que ya existía —las del seed—
+-- se enganche a una cuenta nueva en vez de reventar por el índice de email.
+EXECUTE $fn$
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER AS $body$
+BEGIN
+  INSERT INTO public.users (auth_id, email, nombre, role, activo)
+  VALUES (
+    NEW.id,
+    NEW.email,
+    COALESCE(NEW.raw_user_meta_data->>'nombre', split_part(NEW.email, '@', 1)),
+    (COALESCE(NEW.raw_user_meta_data->>'role', 'alumno'))::public.user_role,
+    true
+  )
+  ON CONFLICT (email) DO UPDATE SET
+    auth_id = EXCLUDED.auth_id,
+    nombre  = EXCLUDED.nombre,
+    role    = EXCLUDED.role,
+    activo  = EXCLUDED.activo;
+  RETURN NEW;
+END;
+$body$ LANGUAGE plpgsql SECURITY DEFINER;
+$fn$;
+
+EXECUTE 'DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users';
+EXECUTE 'CREATE TRIGGER on_auth_user_created
+           AFTER INSERT ON auth.users
+           FOR EACH ROW EXECUTE FUNCTION public.handle_new_user()';
+
+-- El id interno a partir del JWT. Todas las políticas cuelgan de esto.
+EXECUTE $fn$
+CREATE OR REPLACE FUNCTION public.current_user_id()
+RETURNS uuid AS $body$
+  SELECT id FROM public.users WHERE auth_id = auth.uid() LIMIT 1;
+$body$ LANGUAGE sql STABLE SECURITY DEFINER;
+$fn$;
+
+-- Políticas. RLS quedó activada más arriba; esto es lo que abre la puerta,
+-- fila a fila. Se escriben con DROP + CREATE para que este bloque sea
+-- reejecutable tal cual está en db/04_auth.sql.
+
+-- users: su propia fila, y las de sus alumnos si es entrenador.
+EXECUTE 'DROP POLICY IF EXISTS users_select_own ON users';
+EXECUTE 'CREATE POLICY users_select_own ON users FOR SELECT TO authenticated
+           USING (auth_id = auth.uid() OR coach_id = public.current_user_id())';
+EXECUTE 'DROP POLICY IF EXISTS users_update_own ON users';
+EXECUTE 'CREATE POLICY users_update_own ON users FOR UPDATE TO authenticated
+           USING (auth_id = auth.uid()) WITH CHECK (auth_id = auth.uid())';
+
+-- exercises: el catálogo común más lo propio. Mismo criterio que getEjercicios().
+EXECUTE 'DROP POLICY IF EXISTS exercises_select_visible ON exercises';
+EXECUTE 'CREATE POLICY exercises_select_visible ON exercises FOR SELECT TO authenticated
+           USING (es_publico OR created_by = public.current_user_id())';
+EXECUTE 'DROP POLICY IF EXISTS exercises_insert_own ON exercises';
+EXECUTE 'CREATE POLICY exercises_insert_own ON exercises FOR INSERT TO authenticated
+           WITH CHECK (created_by = public.current_user_id())';
+EXECUTE 'DROP POLICY IF EXISTS exercises_update_own ON exercises';
+EXECUTE 'CREATE POLICY exercises_update_own ON exercises FOR UPDATE TO authenticated
+           USING (created_by = public.current_user_id())
+           WITH CHECK (created_by = public.current_user_id())';
+EXECUTE 'DROP POLICY IF EXISTS exercises_delete_own ON exercises';
+EXECUTE 'CREATE POLICY exercises_delete_own ON exercises FOR DELETE TO authenticated
+           USING (created_by = public.current_user_id())';
+
+-- routines: propias, o escritas por uno como entrenador.
+EXECUTE 'DROP POLICY IF EXISTS routines_select_own ON routines';
+EXECUTE 'CREATE POLICY routines_select_own ON routines FOR SELECT TO authenticated
+           USING (owner_id = public.current_user_id() OR author_id = public.current_user_id())';
+EXECUTE 'DROP POLICY IF EXISTS routines_insert_own ON routines';
+EXECUTE 'CREATE POLICY routines_insert_own ON routines FOR INSERT TO authenticated
+           WITH CHECK (owner_id = public.current_user_id())';
+EXECUTE 'DROP POLICY IF EXISTS routines_update_own ON routines';
+EXECUTE 'CREATE POLICY routines_update_own ON routines FOR UPDATE TO authenticated
+           USING (owner_id = public.current_user_id())
+           WITH CHECK (owner_id = public.current_user_id())';
+EXECUTE 'DROP POLICY IF EXISTS routines_delete_own ON routines';
+EXECUTE 'CREATE POLICY routines_delete_own ON routines FOR DELETE TO authenticated
+           USING (owner_id = public.current_user_id())';
+
+-- routine_days y routine_exercises: cuelgan de la rutina.
+EXECUTE 'DROP POLICY IF EXISTS routine_days_select_own ON routine_days';
+EXECUTE 'CREATE POLICY routine_days_select_own ON routine_days FOR SELECT TO authenticated
+           USING (routine_id IN (SELECT id FROM routines
+                  WHERE owner_id = public.current_user_id() OR author_id = public.current_user_id()))';
+EXECUTE 'DROP POLICY IF EXISTS routine_days_insert_own ON routine_days';
+EXECUTE 'CREATE POLICY routine_days_insert_own ON routine_days FOR INSERT TO authenticated
+           WITH CHECK (routine_id IN (SELECT id FROM routines WHERE owner_id = public.current_user_id()))';
+EXECUTE 'DROP POLICY IF EXISTS routine_days_update_own ON routine_days';
+EXECUTE 'CREATE POLICY routine_days_update_own ON routine_days FOR UPDATE TO authenticated
+           USING (routine_id IN (SELECT id FROM routines WHERE owner_id = public.current_user_id()))';
+EXECUTE 'DROP POLICY IF EXISTS routine_days_delete_own ON routine_days';
+EXECUTE 'CREATE POLICY routine_days_delete_own ON routine_days FOR DELETE TO authenticated
+           USING (routine_id IN (SELECT id FROM routines WHERE owner_id = public.current_user_id()))';
+
+EXECUTE 'DROP POLICY IF EXISTS routine_exercises_select_own ON routine_exercises';
+EXECUTE 'CREATE POLICY routine_exercises_select_own ON routine_exercises FOR SELECT TO authenticated
+           USING (routine_day_id IN (SELECT d.id FROM routine_days d JOIN routines r ON r.id = d.routine_id
+                  WHERE r.owner_id = public.current_user_id() OR r.author_id = public.current_user_id()))';
+EXECUTE 'DROP POLICY IF EXISTS routine_exercises_insert_own ON routine_exercises';
+EXECUTE 'CREATE POLICY routine_exercises_insert_own ON routine_exercises FOR INSERT TO authenticated
+           WITH CHECK (routine_day_id IN (SELECT d.id FROM routine_days d JOIN routines r ON r.id = d.routine_id
+                       WHERE r.owner_id = public.current_user_id()))';
+EXECUTE 'DROP POLICY IF EXISTS routine_exercises_update_own ON routine_exercises';
+EXECUTE 'CREATE POLICY routine_exercises_update_own ON routine_exercises FOR UPDATE TO authenticated
+           USING (routine_day_id IN (SELECT d.id FROM routine_days d JOIN routines r ON r.id = d.routine_id
+                  WHERE r.owner_id = public.current_user_id()))';
+EXECUTE 'DROP POLICY IF EXISTS routine_exercises_delete_own ON routine_exercises';
+EXECUTE 'CREATE POLICY routine_exercises_delete_own ON routine_exercises FOR DELETE TO authenticated
+           USING (routine_day_id IN (SELECT d.id FROM routine_days d JOIN routines r ON r.id = d.routine_id
+                  WHERE r.owner_id = public.current_user_id()))';
+
+-- assignments: como alumno se lee, como entrenador se escribe.
+EXECUTE 'DROP POLICY IF EXISTS assignments_select_own ON assignments';
+EXECUTE 'CREATE POLICY assignments_select_own ON assignments FOR SELECT TO authenticated
+           USING (client_id = public.current_user_id() OR coach_id = public.current_user_id())';
+-- Escribe el entrenador del alumno, o el propio alumno cuando el plan es suyo
+-- (la fila con `coach_id IS NULL`).
+EXECUTE 'DROP POLICY IF EXISTS assignments_insert_coach ON assignments';
+EXECUTE 'CREATE POLICY assignments_insert_coach ON assignments FOR INSERT TO authenticated
+           WITH CHECK (
+             coach_id = public.current_user_id()
+             OR (coach_id IS NULL AND client_id = public.current_user_id())
+           )';
+EXECUTE 'DROP POLICY IF EXISTS assignments_update_coach ON assignments';
+EXECUTE 'CREATE POLICY assignments_update_coach ON assignments FOR UPDATE TO authenticated
+           USING (
+             coach_id = public.current_user_id()
+             OR (coach_id IS NULL AND client_id = public.current_user_id())
+           )
+           WITH CHECK (
+             coach_id = public.current_user_id()
+             OR (coach_id IS NULL AND client_id = public.current_user_id())
+           )';
+
+-- workout_sessions y set_logs: solo lo propio. El historial no se comparte ni
+-- con el entrenador por esta puerta.
+EXECUTE 'DROP POLICY IF EXISTS workout_sessions_select_own ON workout_sessions';
+EXECUTE 'CREATE POLICY workout_sessions_select_own ON workout_sessions FOR SELECT TO authenticated
+           USING (user_id = public.current_user_id())';
+EXECUTE 'DROP POLICY IF EXISTS workout_sessions_insert_own ON workout_sessions';
+EXECUTE 'CREATE POLICY workout_sessions_insert_own ON workout_sessions FOR INSERT TO authenticated
+           WITH CHECK (user_id = public.current_user_id())';
+EXECUTE 'DROP POLICY IF EXISTS workout_sessions_update_own ON workout_sessions';
+EXECUTE 'CREATE POLICY workout_sessions_update_own ON workout_sessions FOR UPDATE TO authenticated
+           USING (user_id = public.current_user_id())
+           WITH CHECK (user_id = public.current_user_id())';
+EXECUTE 'DROP POLICY IF EXISTS workout_sessions_delete_own ON workout_sessions';
+EXECUTE 'CREATE POLICY workout_sessions_delete_own ON workout_sessions FOR DELETE TO authenticated
+           USING (user_id = public.current_user_id())';
+
+EXECUTE 'DROP POLICY IF EXISTS set_logs_select_own ON set_logs';
+EXECUTE 'CREATE POLICY set_logs_select_own ON set_logs FOR SELECT TO authenticated
+           USING (session_id IN (SELECT id FROM workout_sessions WHERE user_id = public.current_user_id()))';
+EXECUTE 'DROP POLICY IF EXISTS set_logs_insert_own ON set_logs';
+EXECUTE 'CREATE POLICY set_logs_insert_own ON set_logs FOR INSERT TO authenticated
+           WITH CHECK (session_id IN (SELECT id FROM workout_sessions WHERE user_id = public.current_user_id()))';
+EXECUTE 'DROP POLICY IF EXISTS set_logs_update_own ON set_logs';
+EXECUTE 'CREATE POLICY set_logs_update_own ON set_logs FOR UPDATE TO authenticated
+           USING (session_id IN (SELECT id FROM workout_sessions WHERE user_id = public.current_user_id()))';
+EXECUTE 'DROP POLICY IF EXISTS set_logs_delete_own ON set_logs';
+EXECUTE 'CREATE POLICY set_logs_delete_own ON set_logs FOR DELETE TO authenticated
+           USING (session_id IN (SELECT id FROM workout_sessions WHERE user_id = public.current_user_id()))';
+
+-- personal_records: solo lectura. Las marcas las escribe registrar_prs(), que
+-- corre como SECURITY DEFINER al cerrar la sesión.
+EXECUTE 'DROP POLICY IF EXISTS personal_records_select_own ON personal_records';
+EXECUTE 'CREATE POLICY personal_records_select_own ON personal_records FOR SELECT TO authenticated
+           USING (user_id = public.current_user_id())';
+
+-- coach_invites: el entrenador manda sobre sus propios códigos.
+--
+-- El canje NO tiene política a propósito. Para canjear hay que leer la fila de
+-- otro —la del entrenador— y una política que lo permitiera dejaría enumerar
+-- códigos ajenos desde el navegador. En el web el canje lo hace una server
+-- action, que entra con el rol dueño y comprueba ella misma.
+EXECUTE 'DROP POLICY IF EXISTS coach_invites_select_own ON coach_invites';
+EXECUTE 'CREATE POLICY coach_invites_select_own ON coach_invites FOR SELECT TO authenticated
+           USING (coach_id = public.current_user_id())';
+EXECUTE 'DROP POLICY IF EXISTS coach_invites_insert_own ON coach_invites';
+EXECUTE 'CREATE POLICY coach_invites_insert_own ON coach_invites FOR INSERT TO authenticated
+           WITH CHECK (coach_id = public.current_user_id())';
+EXECUTE 'DROP POLICY IF EXISTS coach_invites_delete_own ON coach_invites';
+EXECUTE 'CREATE POLICY coach_invites_delete_own ON coach_invites FOR DELETE TO authenticated
+           USING (coach_id = public.current_user_id() AND used_at IS NULL)';
+
 END $$;

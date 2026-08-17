@@ -1,35 +1,41 @@
 import Link from "next/link";
+import { LogOut } from "lucide-react";
 
-import { getCurrentUser } from "@/lib/auth";
+import { cerrarSesion } from "@/app/actions";
+import type { User } from "@/db/schema";
+import { esAdmin } from "@/lib/auth";
 
 import { MainNav } from "./main-nav";
 
-export async function SiteHeader() {
-  // Con auth real esto pasa a ser la sesión; hoy es el usuario de MOCK_USER_ID.
-  let nombre: string | null = null;
-  let rol: string | null = null;
-  try {
-    const user = await getCurrentUser();
-    nombre = user.nombre;
-    rol = user.role;
-  } catch {
-    // La base todavía no está lista: la cabecera no debe tumbar la página,
-    // el error se cuenta con detalle en error.tsx.
-  }
-
+/**
+ * El usuario llega como prop desde el layout, que ya lo resolvió: la cabecera
+ * solo se pinta cuando hay sesión, así que aquí no hace falta comprobarlo otra
+ * vez ni tragarse errores de base.
+ */
+export function SiteHeader({ user }: { user: User }) {
   return (
     <header className="nav site-header">
       <Link href="/" className="nav-brand brand">
         <span className="brand-mark" aria-hidden />
         TEMPO
       </Link>
-      <MainNav />
-      {nombre && (
-        <span className="user-chip">
-          <strong>{nombre}</strong>
-          {rol === "entrenador" ? "entrenador" : "alumno"}
-        </span>
-      )}
+      <MainNav admin={esAdmin(user)} />
+      <span className="user-chip">
+        <strong>{user.nombre}</strong>
+        {user.role}
+      </span>
+      {/* Cerrar sesión borra la cookie: es una mutación, y las mutaciones no
+          cuelgan de un GET — Next prefetchea los <Link> al pasar el ratón. */}
+      <form action={cerrarSesion}>
+        <button
+          type="submit"
+          className="btn btn-icon"
+          title="Cerrar sesión"
+          aria-label="Cerrar sesión"
+        >
+          <LogOut size={16} />
+        </button>
+      </form>
     </header>
   );
 }

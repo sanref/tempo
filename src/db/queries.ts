@@ -1,10 +1,12 @@
 import "server-only";
 
 import { and, asc, count, desc, eq, isNull, or, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 
 import { db } from "@/db";
 import {
   assignments,
+  coachInvites,
   exercises,
   personalRecords,
   routineDays,
@@ -762,4 +764,61 @@ export async function getResumenCoach(coachId: string) {
     WHERE u.coach_id = ${coachId} AND u.activo
   `);
   return { activos: num(rows[0]?.activos), riesgo: num(rows[0]?.riesgo) };
+}
+
+// ── Invitaciones de entrenador ────────────────────────────────────────────
+
+/**
+ * Los códigos de un entrenador, del más nuevo al más viejo.
+ *
+ * El estado se calcula aquí y no se guarda: un código caducado no cambia de
+ * fila al vencer, simplemente deja de servir. Guardarlo obligaría a un job que
+ * fuera marcándolos.
+ */
+export async function getInvitaciones(coachId: string) {
+  const filas = await db
+    .select({
+      id: coachInvites.id,
+      codigo: coachInvites.codigo,
+      createdAt: coachInvites.createdAt,
+      expiresAt: coachInvites.expiresAt,
+      usedAt: coachInvites.usedAt,
+      usadoPor: users.nombre,
+    })
+    .from(coachInvites)
+    .leftJoin(users, eq(users.id, coachInvites.usedBy))
+    .where(eq(coachInvites.coachId, coachId))
+    .orderBy(desc(coachInvites.createdAt))
+    .limit(20);
+
+  const ahora = Date.now();
+  return filas.map((f) => ({
+    ...f,
+    estado: f.usedAt
+      ? ("usado" as const)
+      : f.expiresAt.getTime() <= ahora
+        ? ("caducado" as const)
+        : ("activo" as const),
+  }));
+}
+
+// ── Administración ────────────────────────────────────────────────────────
+
+/** Todos los usuarios con su entrenador. Solo lo usa /admin. */
+export async function getUsuarios() {
+  const coach = alias(users, "coach");
+
+  return db
+    .select({
+      id: users.id,
+      nombre: users.nombre,
+      email: users.email,
+      role: users.role,
+      activo: users.activo,
+      createdAt: users.createdAt,
+      coachNombre: coach.nombre,
+    })
+    .from(users)
+    .leftJoin(coach, eq(coach.id, users.coachId))
+    .orderBy(asc(users.nombre));
 }

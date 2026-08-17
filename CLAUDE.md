@@ -20,14 +20,25 @@ npm run db:seed      # db/99_seed.sql — 12 semanas de historial relativas a no
 npm run db:reset     # 00 + 01 + 99, destructivo
 ```
 
-Requiere Postgres (local o Supabase) y un `.env` con `DATABASE_URL` y
-`MOCK_USER_ID` (ver `.env.example`). Todo el esquema vive en `public`, sin
-schema propio: es donde Supabase espera encontrarlo. Los scripts no crean ni
-borran `public` —trae permisos y configuración del proyecto—, solo sus objetos.
+Requiere Postgres (local o Supabase) y un `.env` con `DATABASE_URL`,
+`NEXT_PUBLIC_SUPABASE_URL` y `NEXT_PUBLIC_SUPABASE_ANON_KEY` (ver
+`.env.example`). Todo el esquema vive en `public`, sin schema propio: es donde
+Supabase espera encontrarlo. Los scripts no crean ni borran `public` —trae
+permisos y configuración del proyecto—, solo sus objetos.
 
-Usuarios del seed:
-- `11111111-…1111` Marco Duarte (alumno)
-- `22222222-…2222` Laura Ferrán (entrenadora) — cambiá `MOCK_USER_ID` para ver `/coach`
+El login exige Supabase: en un Postgres pelado el esquema `auth` no existe, el
+trigger no se instala y no hay con qué entrar. `01_schema.sql` lo detecta y se
+salta esa parte, así que la base levanta igual para trabajar el resto.
+
+> ⚠ **La base de Supabase está compartida con `tempo_mobile`.** `db:reset` es
+> destructivo para los dos y no sabe recrear los RPC del móvil (viven en
+> `tempo_mobile/supabase/migrations/`). Resetear solo contra una base
+> desechable.
+
+Usuarios del seed (las contraseñas se ponen registrándolos, no vienen en el SQL):
+- `11111111-…1111` Marco Duarte, `marco@tempo.gym` (alumno)
+- `22222222-…2222` Laura Ferrán, `laura@tempo.gym` (entrenadora) — entrá con
+  ella para ver `/coach`
 
 ## Invariantes
 
@@ -81,11 +92,32 @@ volumen (`kg * reps`) da 0 y `registrar_prs()` los deja fuera, que es lo
 correcto: sumar isométricos a una curva de kilos la falsea.
 
 **El texto de `reps` se traduce en dos sitios y tienen que decir lo mismo.**
-`reps` es texto libre del plan (`'8'`, `'8-12'`, `'45 s'`). Lo convierten a
-número `reps_planificadas()` / `segundos_planificados()` en el SQL y
-`repsPlanificadas()` / `segundosPlanificados()` en `src/lib/format.ts`. Un
-rango se resuelve por el extremo bajo. Nunca quitar los no-dígitos a pelo:
-`'8-12'` se convierte en 812 y revienta contra el CHECK de `set_logs.reps`.
+`reps` es texto libre del plan. Lo convierten a número `reps_planificadas()` /
+`segundos_planificados()` en el SQL y `repsPlanificadas()` /
+`segundosPlanificados()` en `src/lib/format.ts`. Nunca quitar los no-dígitos a
+pelo: `'8-12'` se convierte en 812 y revienta contra el CHECK de
+`set_logs.reps`.
+
+**La barra separa series; el guion es un rango.**
+
+```
+10            todas las series a 10
+8-12          un rango, todas las series → 8 (extremo bajo)
+15/12/10/10   una serie por tramo → 15, 12, 10, 10
+12-15/10-12/8 un rango por serie
+45 s/30 s     lo mismo por tiempo
+```
+
+Los dos separadores significan cosas distintas y no se pueden intercambiar:
+`'8-12'` ya era un rango antes de que existieran los tramos —y es lo que lee la
+progresión doble—, así que si el guion separase series sería ambiguo. Si hay
+menos tramos que series se repite el último: 5 series con `'15/12/10'` son 15,
+12, 10, 10 y 10.
+
+Las funciones llevan un segundo parámetro `serie` (base 0) con valor por
+defecto, así que las llamadas de un argumento siguen valiendo y devuelven el
+primer tramo. Quien pasa el índice es `empezarSesion()`, al materializar cada
+serie.
 
 **Un ejercicio en uso no se borra.** `routine_exercises.exercise_id` y
 `set_logs.exercise_id` son ON DELETE RESTRICT: la base ya lo impide, y
@@ -94,13 +126,21 @@ en vez de soltar una violación de clave ajena. Renombrarlo sí se permite
 siempre — todo apunta por id, así que corregir una errata la arregla en las
 rutinas y en el historial a la vez.
 
-**Las tablas van con RLS activada y sin políticas.** En `public`, PostgREST
-publica lo que haya: la clave anónima de Supabase viaja en el navegador y sin
-RLS lee y escribe todo. La app no se entera porque entra por `DATABASE_URL` con
-el rol dueño de las tablas, que salta RLS. Una tabla nueva se crea igual —
-`ENABLE ROW LEVEL SECURITY` en `01_schema.sql` y en su migración—, y
-`session_summaries` lleva `security_invoker` para no enseñar `set_logs` por la
-puerta de atrás.
+**Las tablas van con RLS activada y con políticas por usuario.** En `public`,
+PostgREST publica lo que haya: la clave publicable de Supabase viaja en el
+navegador y sin RLS lee y escribe todo. Las políticas están al final de
+`01_schema.sql` y en `04_auth.sql`, y cuelgan de `current_user_id()`.
+
+El web no depende de ellas —entra por `DATABASE_URL` con el rol dueño, que
+salta RLS— pero **`tempo_mobile` sí**: todo lo suyo pasa por PostgREST. Si una
+tabla nueva se queda sin políticas, el móvil deja de ver sus datos sin dar
+ningún error. Una tabla nueva se crea con `ENABLE ROW LEVEL SECURITY` **y** sus
+políticas, en `01_schema.sql` y en su migración. `session_summaries` lleva
+`security_invoker` para no enseñar `set_logs` por la puerta de atrás.
+
+Que el web salte RLS es justamente por qué **las server actions siguen
+comprobando a mano que cada fila es del usuario actual**. Esa es su única
+protección; la base no lo va a hacer por ellas.
 
 **Solo una sesión en curso por usuario**, garantizado por un índice único
 parcial. "Empezar" reanuda si hay una abierta, no duplica.
@@ -113,6 +153,50 @@ rehace es la progresión lineal: ya se aplicó al cerrar, y repetirla subiría l
 carga dos veces. Lo mismo al borrar un entrenamiento — se van sus series y sus
 marcas, la carga de la rutina se queda.
 
+**Vincular necesita a los dos; desvincular, a uno.** El entrenador genera un
+código (`coach_invites`) y el alumno lo canjea: nadie reclama a nadie. Pero
+cortar es unilateral y lo puede hacer cualquiera de los dos
+(`desvincularAlumno()` / `dejarEntrenador()`) — nadie tiene que pedir permiso
+para dejar de entrenar con alguien. Esas tres funciones son las únicas que
+tocan `users.coach_id`.
+
+**Desvincular no toca el plan.** Se corta el vínculo y nada más: el alumno
+sigue con su plan en marcha en vez de quedarse a mitad de programa sin nada que
+entrenar. `assignments` tampoco se limpia — es historial, y ahí consta quién
+asignó qué aunque esa persona ya no lo entrene. Ojo con esto: `getPlanActivo()`
+lee de `assignments`, no de `users.coach_id`, así que seguirá diciendo "asignada
+por Fulano". Es cierto: Fulano la asignó. Si quiere otra cosa, tiene
+`usarComoMiPlan()`.
+
+El canje es un `UPDATE … WHERE used_at IS NULL`, y esa condición es lo que
+resuelve la carrera: si dos personas canjean el mismo código a la vez, el
+segundo UPDATE no toca ninguna fila y se lleva el error. Comprobar antes con un
+SELECT no cierra la ventana entre leer y escribir.
+
+**El rol `admin` no se reparte desde la app.** Se pone a mano en la base. Y un
+admin no puede cambiar su propio rol ni desactivarse: como no hay otro camino a
+admin, degradarse a uno mismo puede dejar la instalación sin nadie capaz de
+repartir roles. `cambiarRol()` también se niega a degradar a un entrenador que
+todavía tenga alumnos: hay que soltarlos primero desde `/coach`, para que sea
+él quien decida qué pasa con cada uno.
+
+**`assignments` es la única fuente de "cuál es mi plan".** De ahí salen el
+próximo día, la home, la adherencia y la semana en curso. `coach_id NULL`
+significa una cosa concreta: **se lo asignó el propio alumno**
+(`usarComoMiPlan()`). Un plan propio no se marca poniéndose uno de entrenador —
+lo impide el CHECK `assignments_coach_no_self`, porque si se admitieran las dos
+formas el panel de entrenador contaría gente como alumna de sí misma.
+
+Crear una rutina no la convierte en plan: hace falta la fila en `assignments`.
+Sin ella la rutina existe y se puede entrenar desde `/rutinas/[id]`, pero
+`/entrenar` y la home salen vacías.
+
+**Entrenar un día se comprueba contra quién sos.** `empezarSesion()` recibe un
+`routineDayId` y es una server action: el argumento lo elige quien la invoca, no
+la pantalla. `diaEntrenable()` solo lo acepta si la rutina es tuya o la tenés
+asignada y viva. Sin eso se podía abrir una sesión sobre la rutina de otro, y
+`set_logs` se materializaba con sus ejercicios y sus cargas planificadas.
+
 **Un alumno, un plan vivo.** `asignarRutina()` cierra la asignación anterior
 (`ended_on = current_date`) e inserta la nueva en la misma transacción. El
 índice único solo impide repetir la *misma* rutina viva, así que sin ese cierre
@@ -120,13 +204,31 @@ el alumno acabaría con dos planes abiertos y `getPlanActivo()` eligiendo por
 `started_on` — arbitrariamente si coinciden el mismo día. Cerrar no borra nada:
 el historial cuelga de las sesiones, no de la asignación.
 
-**El editor va a dos velocidades.** La estructura (añadir y quitar ejercicios,
-crear y borrar días) escribe en el servidor al instante, porque necesita los
-ids que genera la base; los ajustes (nombre, orden, series, descanso,
-progresión, notas) se editan en local y salen con "Guardar". Por eso `dias`
-vive en estado dentro de `editor-client.tsx` y se actualiza con lo que
-devuelven las acciones: nada de `router.refresh()`, que borraría lo que hubiera
-a medio ajustar.
+**El editor no escribe nada hasta "Guardar".** Añadir y quitar ejercicios,
+crear y borrar días, reordenar y ajustar: todo se acumula en el estado de
+`editor-client.tsx` y sale de una vez por `guardarRutina()`, en una sola
+transacción. Así "Cancelar" descarta de verdad.
+
+Iba a dos velocidades —la estructura al servidor en el acto, los ajustes al
+guardar— y era un bug con forma de diseño: quitabas un ejercicio, pulsabas
+"Cancelar" y seguía borrado. El motivo de entonces (hacían falta los ids que
+genera la base) **solo valía para las altas**, no para las bajas.
+
+**Los ids de lo nuevo los pone el cliente**, con `crypto.randomUUID()`. Las
+columnas son `uuid` y aceptan uno hecho, así que el editor puede indexar su
+estado local sin haber hablado con el servidor. `nuevo: true` marca lo que hay
+que insertar; `ejerciciosBorrados` / `diasBorrados`, lo que hay que borrar. Lo
+que se añadió y se quitó sin guardar no aparece en ninguna de las dos listas:
+nunca existió en la base.
+
+**Todo el estado editable vive dentro de `dias`**, no en variables sueltas para
+el día abierto. Si el descanso, el orden o las notas colgaran del día actual,
+cambiar de pestaña y volver los perdería — que es justo lo que pasaba antes.
+
+**Al guardar se reescriben los `orden` en dos pasadas**, desplazados por encima
+del máximo antes de asentarlos. `(routine_day_id, orden)` y `(routine_id,
+orden)` son únicos y no admiten estados intermedios: sin la pasada de arriba,
+mover el primero al segundo puesto choca contra el índice.
 
 **El service worker nunca toca lo que no sea GET.** Las mutaciones tienen que
 llegar al servidor o fallar de verdad, que es como se entera la cola de la
@@ -157,33 +259,85 @@ pestañas inferior y desaparece la navegación de la cabecera.
 ## Mapa
 
 ```
-db/01_schema.sql              tablas, tipos, índices, vistas, funciones
+db/01_schema.sql              tablas, tipos, índices, vistas, funciones, trigger y políticas
 db/02_….sql                   migraciones, numeradas de 02 a 98
 db/99_seed.sql                datos del prototipo
-src/app/actions.ts            TODAS las mutaciones
-src/app/*/page.tsx            una pantalla por ruta, Server Components
-src/app/*/loading.tsx         esqueleto de esa pantalla, con su misma rejilla
+src/proxy.ts                  refresca el token y corta el paso sin sesión (Edge)
+src/app/layout.tsx            solo el documento — no lee la sesión, ver Auth
+src/app/login/               entrar y crear cuenta (fuera del grupo (app))
 src/app/offline/page.tsx      último recurso del service worker (estática)
-src/app/entrenar/[sesionId]/session-client.tsx   la pieza compleja: cola offline
+src/app/(app)/layout.tsx      cabecera, shell y pestañas; exige sesión
+src/app/(app)/*/page.tsx      una pantalla por ruta, Server Components
+src/app/(app)/*/loading.tsx   esqueleto de esa pantalla, con su misma rejilla
+src/app/(app)/coach/invitaciones.tsx  códigos que reparte el entrenador
+src/app/(app)/coach/canjear.tsx       donde el alumno canjea, y se va
+src/app/(app)/coach/desvincular-alumno.tsx  el entrenador suelta a un alumno
+src/app/(app)/rutinas/[id]/usar-como-mi-plan.tsx  activar una rutina propia como plan
+src/app/(app)/admin/          roles y alta/baja de usuarios (solo admin)
+src/app/actions.ts            TODAS las mutaciones, sesión incluida
+src/app/(app)/entrenar/[sesionId]/session-client.tsx   la pieza compleja: cola offline
 src/components/skeleton.tsx   piezas de los loading.tsx
 src/components/exercise-form.tsx  alta de ejercicio, compartida por biblioteca y editor
 src/components/sw-register.tsx  registra el SW (solo en producción)
 public/sw.js                  caché de shell, sin build step
 src/db/queries.ts             una función de lectura por bloque de pantalla
 src/lib/auth.ts               punto único de acoplamiento con la autenticación
+src/lib/supabase/server.ts    cliente de Supabase atado a las cookies (solo auth)
 src/lib/format.ts             formato es-ES
 ```
 
 ## Auth
 
-Sin autenticación todavía. `getCurrentUser()` en `src/lib/auth.ts` devuelve el
-usuario de `MOCK_USER_ID`. **Ninguna pantalla lee el usuario de otro sitio**, así
-que enchufar Better Auth o Supabase es cambiar esa función y añadir
-`users.auth_id`. Mantené esa propiedad: si necesitás el usuario, importalo de
-ahí.
+Supabase Auth, el mismo proveedor y las mismas cuentas que `tempo_mobile`.
 
-Las server actions ya verifican que la fila pertenece al usuario actual aunque
-la sesión sea falsa. Seguí haciéndolo en las nuevas.
+**Ninguna pantalla lee el usuario de otro sitio que `src/lib/auth.ts`.** Dos
+funciones y hay que elegir bien:
+
+- `getCurrentUser()` — el perfil, o corta y manda a `/login`. Es la de las
+  pantallas.
+- `getOptionalUser()` — el perfil o `null`, sin redirigir. Solo para lo que se
+  pinta *antes* de saber si hay sesión; si `/login` llamara a la otra, entraría
+  en bucle.
+
+Siempre `supabase.auth.getUser()`, nunca `getSession()`: `getSession()` se cree
+lo que traiga la cookie, y la cookie la controla el cliente.
+
+**Supabase solo dice quién sos.** Los datos se siguen leyendo por Drizzle con
+`DATABASE_URL`, que entra con el rol dueño y salta RLS. Por eso las server
+actions verifican a mano que la fila es del usuario actual — seguí haciéndolo
+en las nuevas.
+
+**La identidad y el perfil son dos filas.** `auth.users` (de Supabase) y
+`public.users` (nuestra), unidas por `users.auth_id`. Quien las une es el
+trigger `on_auth_user_created`, no la app: duplicar ese INSERT en el alta
+dejaría cuentas a medias si falla la segunda escritura. El trigger hace
+`ON CONFLICT (email) DO UPDATE`, así que registrarse con el email de una fila
+que ya existía la adopta en vez de fallar — es como los usuarios del seed
+consiguieron cuenta. Ojo: ese UPDATE pisa `role` con lo que venga en
+`raw_user_meta_data`, así que para dar de alta a un entrenador hay que mandarlo
+en el `data` del signUp.
+
+**El chrome cuelga del grupo `(app)`.** El layout raíz no lee la sesión a
+propósito: tocar cookies ahí volvería dinámica toda la app, y con ella
+`/offline`, que es la pantalla que se sirve cuando no hay red y no puede
+depender ni de la base ni de que el servidor conteste. `/login` y `/offline`
+viven fuera del grupo; el resto, dentro, y su layout exige sesión.
+
+El guard vive en dos sitios a propósito: `src/proxy.ts` corta antes de
+renderizar, y `(app)/layout.tsx` lo garantiza si alguien toca el `matcher`.
+`proxy.ts` corre en Edge — ahí no entra ni Drizzle ni `pg`, así que sabe si hay
+sesión pero no quién es. El rol lo comprueba cada pantalla.
+
+**El rol no se lee del JWT.** Supabase lo copia en `user_metadata` al
+registrarse y no lo vuelve a tocar: si un admin cambia el rol en `users`, el
+token sigue diciendo el viejo hasta que la persona vuelva a entrar. La fuente
+es la fila de `users`, siempre.
+
+**`notFound()` sale con HTTP 200 y el cuerpo del 404.** Es cómo Next 16 hace
+streaming: cuando la página llega a `notFound()` las cabeceras ya salieron.
+Pasa en toda la app (`/rutinas/[id]`, `/admin`…). El contenido sí es el
+correcto y no se filtra nada, pero **no confíes en el código de estado para
+comprobar permisos en un test** — comprobá el cuerpo.
 
 ## Pendiente
 
@@ -197,10 +351,33 @@ Por orden de valor:
 3. **Navegación offline entre pantallas.** El service worker guarda documentos,
    pero los payloads RSC van siempre a red: sin cobertura, tocar un enlace cae
    en navegación completa contra el caché. Funciona, pero parpadea.
+4. **Invitaciones en el móvil.** El canje solo existe en el web. `coach_invites`
+   tiene RLS y políticas para que el entrenador vea las suyas, pero el canje no
+   tiene política a propósito: leer la fila de otro dejaría enumerar códigos
+   ajenos desde el navegador. Cuando el móvil lo necesite, va como función
+   `SECURITY DEFINER`, no como política.
+5. **Traspasar alumnos entre entrenadores.** Hoy soltar y volver a vincular son
+   dos pasos con un código de por medio; no hay forma de pasarle un alumno a un
+   colega de una vez.
 
 ## Al terminar un cambio
 
 Corré `npm run typecheck` y `npm run build`. Si tocaste SQL, corré también
-`npm run db:reset` y comprobá que el seed entra limpio. Si el cambio lleva
-migración, probala además contra una copia con datos —`pg_dump` a una base
-desechable y `db:migrate` encima— y corrésela dos veces seguidas.
+`npm run db:reset` y comprobá que el seed entra limpio — **contra una base
+desechable, nunca contra la de Supabase, que la comparte el móvil**. Si el
+cambio lleva migración, probala además contra una copia con datos —`pg_dump` a
+una base desechable y `db:migrate` encima— y corrésela dos veces seguidas.
+
+Si tocaste rutas, mirá la tabla del build: `/offline` tiene que seguir saliendo
+como `○ (Static)`. Si aparece como `ƒ`, algo metió cookies o cabeceras en el
+layout raíz y la pantalla de "sin conexión" pasó a depender del servidor.
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->

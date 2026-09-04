@@ -1,0 +1,109 @@
+# Enlace entre el catálogo público de Tempo (español) y free-exercise-db (inglés).
+#
+#   nombre en español <TAB> fedb_id
+#
+# Curado a mano: el matcheo ES→EN no es fiable y una foto equivocada enseña el
+# movimiento equivocado. `node scripts/generar-enlaces-fedb.mjs --sugerir`
+# propone candidatos para arrancar; la última palabra es de una persona.
+#
+# Se elige el candidato que coincide en movimiento **y** en material, porque la
+# foto tiene que parecerse a lo que el alumno tiene delante: 'Press banca' es
+# con barra, así que va a la versión con barra y no a la de mancuernas.
+#
+# Segunda columna vacía = no existe equivalente. Es una respuesta válida y
+# deliberada: esos se quedan con "Imagen pendiente". Enlazarlos a algo
+# parecido sería peor que no enlazarlos.
+#
+# Al añadir un ejercicio público al seed, añadirlo también aquí y regenerar
+# los UPDATE de db/08_ejercicios_externos.sql.
+
+# ── Pecho ──────────────────────────────────────────────────────────────────
+Press banca	Barbell_Bench_Press_-_Medium_Grip
+Press banca inclinado	Barbell_Incline_Bench_Press_-_Medium_Grip
+Press inclinado mancuernas	Incline_Dumbbell_Press
+Press banca con mancuernas	Dumbbell_Bench_Press
+Press declinado	Decline_Barbell_Bench_Press
+Aperturas en polea	Flat_Bench_Cable_Flyes
+Cruce de poleas	Cable_Crossover
+Pec deck	Butterfly
+Fondos en paralelas	Dips_-_Chest_Version
+Aperturas inclinadas con mancuernas	Incline_Dumbbell_Flyes
+
+# ── Espalda ────────────────────────────────────────────────────────────────
+Peso muerto	Barbell_Deadlift
+Peso muerto rumano	Romanian_Deadlift
+Peso muerto sumo	Sumo_Deadlift
+Dominadas	Pullups
+Dominadas lastradas	Weighted_Pull_Ups
+Remo con barra	Bent_Over_Barbell_Row
+Remo en T	T-Bar_Row_with_Handle
+# Pendlay es un remo con barra estricto que reinicia en el suelo cada
+# repetición: misma familia y mismos músculos, así que comparte foto.
+Remo Pendlay	Bent_Over_Barbell_Row
+Remo con mancuerna	One-Arm_Dumbbell_Row
+Remo sentado en polea	Seated_Cable_Rows
+Jalón al pecho	Wide-Grip_Lat_Pulldown
+# El pull-over en polea es el jalón con brazos rectos.
+Pull-over en polea	Straight-Arm_Pulldown
+
+# ── Pierna ─────────────────────────────────────────────────────────────────
+Sentadilla trasera	Barbell_Squat
+Sentadilla frontal	Front_Barbell_Squat
+# No hay ninguna con el pie trasero elevado; la split squat es lo más cercano.
+Sentadilla búlgara	Split_Squat_with_Dumbbells
+Prensa 45°	Leg_Press
+Extensión de cuádriceps	Leg_Extensions
+Curl femoral tumbado	Lying_Leg_Curls
+Curl femoral sentado	Seated_Leg_Curl
+Abducción de cadera	Thigh_Abductor
+Zancadas con mancuernas	Dumbbell_Lunges
+# Con pesa rusa en vez de mancuerna, pero el movimiento es el mismo.
+Peso muerto a una pierna	Kettlebell_One-Legged_Deadlift
+Elevación de gemelo	Standing_Calf_Raises
+Hip thrust	Barbell_Hip_Thrust
+Bridge 3 apoyo inferior
+AMI - Glúteos 1 pierna 3 apoyos
+
+# ── Hombro ─────────────────────────────────────────────────────────────────
+Press militar	Standing_Military_Press
+Press militar con mancuernas	Dumbbell_Shoulder_Press
+Press Arnold	Arnold_Dumbbell_Press
+Elevaciones laterales	Side_Lateral_Raise
+Elevación frontal	Front_Dumbbell_Raise
+Elevación posterior (pájaros)	Seated_Bent-Over_Rear_Delt_Raise
+Face pull	Face_Pull
+
+# ── Brazo ──────────────────────────────────────────────────────────────────
+Curl con barra Z	EZ-Bar_Curl
+Curl de bíceps con mancuernas	Dumbbell_Bicep_Curl
+Curl martillo	Hammer_Curls
+Curl concentrado	Concentration_Curls
+Extensión tríceps en polea	Triceps_Pushdown
+Press francés	Lying_Triceps_Press
+Press francés en polea	Cable_Lying_Triceps_Extension
+Fondos en banco	Bench_Dips
+Patada de tríceps	Tricep_Dumbbell_Kickback
+Curl bíceps en banco Scott	Preacher_Curl
+
+# ── Core ───────────────────────────────────────────────────────────────────
+Plancha con lastre	Plank
+Rueda abdominal	Ab_Roller
+Crunch en polea	Cable_Crunch
+Elevación de piernas colgado	Hanging_Leg_Raise
+Russian twist	Russian_Twist
+Abdominales en máquina	Ab_Crunch_Machine
+Elevación de pierna alternativa en plancha
+Crunch abdominal con carga por encima de la cabeza	Crunch_-_Hands_Overhead
+Flexión de cadera en plancha lateral
+Encogimiento abdominal	Crunches
+Escalador	Mountain_Climbers
+# Variante de posición de piernas sobre el mismo encogimiento.
+Crunch con piernas elevadas	Crunches
+
+# ── Trapecio ───────────────────────────────────────────────────────────────
+Encogimientos con barra	Barbell_Shrug
+Encogimientos con mancuernas	Dumbbell_Shrug
+
+# ── Antebrazo ──────────────────────────────────────────────────────────────
+Curl de muñeca	Seated_Palm-Up_Barbell_Wrist_Curl
+Farmer walk	Farmers_Walk

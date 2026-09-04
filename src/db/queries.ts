@@ -1,12 +1,13 @@
 import "server-only";
 
-import { and, asc, count, desc, eq, isNull, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 
 import { db } from "@/db";
 import {
   assignments,
   coachInvites,
+  exerciseAliases,
   exercises,
   personalRecords,
   routineDays,
@@ -24,6 +25,18 @@ import {
  */
 
 const num = (v: unknown) => Number(v ?? 0);
+
+/**
+ * El alias de este usuario, para colgarlo de un `leftJoin`.
+ *
+ * Solo el propio: fuera de una rutina no hay autor del que heredar nada, y en
+ * la biblioteca, el progreso y las marcas manda uno. Quien sí mira los dos es
+ * `cargarDias()` / `getSesion()`, que van en SQL crudo.
+ */
+function aliasDe(userId: string, nombre: string) {
+  const t = alias(exerciseAliases, nombre);
+  return { t, on: and(eq(t.exerciseId, exercises.id), eq(t.userId, userId)) };
+}
 
 // ── Inicio ────────────────────────────────────────────────────────────────
 
@@ -139,12 +152,21 @@ export type DiaConEjercicios = {
   duracionMin: number | null;
   descansoDefectoS: number;
   progresion: "lineal" | "doble" | "manual";
+  /** Las notas del día. El editor las reescribe al guardar, así que hay que
+      leerlas: sin esto, abrir el editor y guardar las dejaba en blanco. */
+  notas: string;
   ejercicios: {
     id: string;
     exerciseId: string;
     orden: number;
     nombre: string;
+    /** Cómo lo llama quien mira. `null` ⇒ se pinta `nombre` a secas. */
+    alias: string | null;
     equipo: string;
+    // Para la miniatura de la pantalla de sesión. Van juntos porque la foto
+    // propia pisa a la del catálogo y hay que saber si existe.
+    imagenUrl: string | null;
+    fedbId: string | null;
     series: number;
     tipo: "reps" | "tiempo";
     reps: string;
@@ -154,7 +176,16 @@ export type DiaConEjercicios = {
   }[];
 };
 
-async function cargarDias(routineId: string): Promise<DiaConEjercicios[]> {
+/**
+ * Los días de una rutina con su prescripción, vistos por `userId`.
+ *
+ * El `userId` es lo que resuelve el alias, y hay dos en juego: el de quien mira
+ * y el de quien escribió la rutina (`routines.author_id`). Gana el primero —
+ * dentro del plan de mi entrenador veo su nombre solo mientras yo no ponga el
+ * mío. En SQL crudo y no con el query builder porque son dos LEFT JOIN sobre
+ * la misma tabla y un coalesce entre ellos.
+ */
+async function cargarDias(routineId: string, userId: string): Promise<DiaConEjercicios[]> {
   const dias = await db
     .select()
     .from(routineDays)
@@ -163,26 +194,56 @@ async function cargarDias(routineId: string): Promise<DiaConEjercicios[]> {
 
   if (dias.length === 0) return [];
 
-  const ejercicios = await db
-    .select({
-      id: routineExercises.id,
-      routineDayId: routineExercises.routineDayId,
-      exerciseId: routineExercises.exerciseId,
-      orden: routineExercises.orden,
-      series: routineExercises.series,
-      tipo: routineExercises.tipo,
-      reps: routineExercises.reps,
-      cargaKg: routineExercises.cargaKg,
-      cargaTexto: routineExercises.cargaTexto,
-      descansoS: routineExercises.descansoS,
-      nombre: exercises.nombre,
-      equipo: exercises.equipo,
-    })
-    .from(routineExercises)
-    .innerJoin(exercises, eq(exercises.id, routineExercises.exerciseId))
-    .innerJoin(routineDays, eq(routineDays.id, routineExercises.routineDayId))
-    .where(eq(routineDays.routineId, routineId))
-    .orderBy(asc(routineExercises.orden));
+  const { rows } = await db.execute<{
+    id: string;
+    routine_day_id: string;
+    exercise_id: string;
+    orden: number;
+    series: number;
+    tipo: "reps" | "tiempo";
+    reps: string;
+    carga_kg: string | null;
+    carga_texto: string | null;
+    descanso_s: number | null;
+    nombre: string;
+    alias: string | null;
+    equipo: string;
+    imagen_url: string | null;
+    fedb_id: string | null;
+  }>(sql`
+    SELECT
+      re.id::text, re.routine_day_id::text, re.exercise_id::text,
+      re.orden, re.series, re.tipo::text AS tipo, re.reps,
+      re.carga_kg::text, re.carga_texto, re.descanso_s,
+      e.nombre, e.equipo, e.imagen_url, e.fedb_id,
+      coalesce(mio.alias, autor.alias) AS alias
+    FROM routine_exercises re
+    JOIN routine_days d ON d.id = re.routine_day_id
+    JOIN routines r ON r.id = d.routine_id
+    JOIN exercises e ON e.id = re.exercise_id
+    LEFT JOIN exercise_aliases mio   ON mio.exercise_id = e.id AND mio.user_id = ${userId}
+    LEFT JOIN exercise_aliases autor ON autor.exercise_id = e.id AND autor.user_id = r.author_id
+    WHERE d.routine_id = ${routineId}
+    ORDER BY re.orden
+  `);
+
+  const ejercicios = rows.map((e) => ({
+    id: e.id,
+    routineDayId: e.routine_day_id,
+    exerciseId: e.exercise_id,
+    orden: e.orden,
+    series: e.series,
+    tipo: e.tipo,
+    reps: e.reps,
+    cargaKg: e.carga_kg,
+    cargaTexto: e.carga_texto,
+    descansoS: e.descanso_s,
+    nombre: e.nombre,
+    alias: e.alias,
+    equipo: e.equipo,
+    imagenUrl: e.imagen_url,
+    fedbId: e.fedb_id,
+  }));
 
   return dias.map((d) => ({
     id: d.id,
@@ -193,6 +254,7 @@ async function cargarDias(routineId: string): Promise<DiaConEjercicios[]> {
     duracionMin: d.duracionMin,
     descansoDefectoS: d.descansoDefectoS,
     progresion: d.progresion,
+    notas: d.notas,
     ejercicios: ejercicios
       .filter((e) => e.routineDayId === d.id)
       .map(({ routineDayId: _ignored, ...e }) => e),
@@ -204,7 +266,7 @@ export async function getProximoDia(userId: string): Promise<DiaConEjercicios | 
   const plan = await getPlanActivo(userId);
   if (!plan) return null;
 
-  const dias = await cargarDias(plan.routineId);
+  const dias = await cargarDias(plan.routineId, userId);
   if (dias.length === 0) return null;
 
   const ultima = await db
@@ -230,9 +292,12 @@ export async function getVolumenSemanal(userId: string, semanas = 12) {
 }
 
 export async function getRecordsRecientes(userId: string, limite = 3) {
+  const mio = aliasDe(userId, "alias_mio");
+
   return db
     .select({
       nombre: exercises.nombre,
+      alias: mio.t.alias,
       kg: personalRecords.kg,
       reps: personalRecords.reps,
       deltaKg: personalRecords.deltaKg,
@@ -240,6 +305,7 @@ export async function getRecordsRecientes(userId: string, limite = 3) {
     })
     .from(personalRecords)
     .innerJoin(exercises, eq(exercises.id, personalRecords.exerciseId))
+    .leftJoin(mio.t, mio.on)
     .where(eq(personalRecords.userId, userId))
     .orderBy(desc(personalRecords.achievedAt))
     .limit(limite);
@@ -275,6 +341,58 @@ export async function getRutinas(userId: string) {
   }));
 }
 
+export type RutinaParaAgregar = {
+  id: string;
+  nombre: string;
+  dias: {
+    id: string;
+    codigo: string;
+    nombre: string;
+    // Para marcar "ya está" en el picker, sin traer el ejercicio entero.
+    ejercicios: string[];
+  }[];
+};
+
+/**
+ * Rutinas propias con sus días, para el selector de "Añadir a rutina" de la
+ * biblioteca. Liviana a propósito —solo ids y nombres, nada de prescripción—
+ * porque viaja igual que el catálogo del picker del editor: entera, una vez
+ * por carga de página.
+ */
+export async function getRutinasConDias(userId: string): Promise<RutinaParaAgregar[]> {
+  const rows = await db
+    .select({
+      rutinaId: routines.id,
+      rutinaNombre: routines.nombre,
+      diaId: routineDays.id,
+      diaCodigo: routineDays.codigo,
+      diaNombre: routineDays.nombre,
+      exerciseId: routineExercises.exerciseId,
+    })
+    .from(routines)
+    .leftJoin(routineDays, eq(routineDays.routineId, routines.id))
+    .leftJoin(routineExercises, eq(routineExercises.routineDayId, routineDays.id))
+    .where(eq(routines.ownerId, userId))
+    .orderBy(asc(routines.status), asc(routines.nombre), asc(routineDays.orden));
+
+  const rutinas = new Map<string, RutinaParaAgregar>();
+  for (const r of rows) {
+    let rutina = rutinas.get(r.rutinaId);
+    if (!rutina) {
+      rutina = { id: r.rutinaId, nombre: r.rutinaNombre, dias: [] };
+      rutinas.set(r.rutinaId, rutina);
+    }
+    if (!r.diaId) continue;
+    let dia = rutina.dias.find((d) => d.id === r.diaId);
+    if (!dia) {
+      dia = { id: r.diaId, codigo: r.diaCodigo!, nombre: r.diaNombre!, ejercicios: [] };
+      rutina.dias.push(dia);
+    }
+    if (r.exerciseId) dia.ejercicios.push(r.exerciseId);
+  }
+  return [...rutinas.values()];
+}
+
 export type RutinaDetalle = {
   id: string;
   nombre: string;
@@ -282,6 +400,8 @@ export type RutinaDetalle = {
   nivel: string;
   semanas: number;
   autor: string | null;
+  /** Quién la escribió. Es de quien sale el alias heredado — ver `cargarDias()`. */
+  autorId: string | null;
   dias: DiaConEjercicios[];
   seriesPorSemana: number;
   adherencia: number;
@@ -296,6 +416,7 @@ export async function getRutina(id: string, userId: string): Promise<RutinaDetal
       nivel: routines.nivel,
       semanas: routines.semanas,
       autor: users.nombre,
+      autorId: routines.authorId,
     })
     .from(routines)
     .leftJoin(users, eq(users.id, routines.authorId))
@@ -305,7 +426,7 @@ export async function getRutina(id: string, userId: string): Promise<RutinaDetal
   const r = rows[0];
   if (!r) return null;
 
-  const dias = await cargarDias(id);
+  const dias = await cargarDias(id, userId);
   const seriesPorSemana = dias.reduce(
     (t, d) => t + d.ejercicios.reduce((s, e) => s + e.series, 0),
     0,
@@ -324,7 +445,15 @@ export type SesionBloque = {
   bloque: number;
   exerciseId: string;
   nombre: string;
+  /** Cómo lo llama quien entrena, o quien le escribió la rutina. */
+  alias: string | null;
   equipo: string;
+  /** Miniatura del movimiento; la foto propia manda sobre la del catálogo. */
+  imagenUrl: string | null;
+  fedbId: string | null;
+  /** Para el diálogo que se abre al tocar la miniatura. */
+  musculosPrimarios: string[] | null;
+  musculosSecundarios: string[] | null;
   descansoS: number;
   /** 'tiempo' cambia la columna de reps por una de segundos. */
   tipo: "reps" | "tiempo";
@@ -390,7 +519,12 @@ export async function getSesion(sesionId: string, userId: string): Promise<Sesio
     hecha: boolean;
     exercise_id: string;
     nombre: string;
+    alias: string | null;
     equipo: string;
+    imagen_url: string | null;
+    fedb_id: string | null;
+    musculos_primarios: string[] | null;
+    musculos_secundarios: string[] | null;
     descanso_s: number | null;
     tipo: "reps" | "tiempo" | null;
     prev_kg: string | null;
@@ -402,11 +536,19 @@ export async function getSesion(sesionId: string, userId: string): Promise<Sesio
       l.bloque, l.orden, l.kg::text, l.reps, l.segundos,
       (l.done_at IS NOT NULL) AS hecha,
       l.exercise_id::text,
-      e.nombre, e.equipo,
+      e.nombre, e.equipo, e.imagen_url, e.fedb_id,
+      e.musculos_primarios, e.musculos_secundarios,
+      -- El mío gana; si no puse ninguno, el de quien escribió la rutina de la
+      -- que salió esta sesión. Ver cargarDias(), que resuelve lo mismo.
+      coalesce(mio.alias, autor.alias) AS alias,
       re.descanso_s, re.tipo::text AS tipo,
       p.kg::text AS prev_kg, p.reps AS prev_reps, p.segundos AS prev_segundos
     FROM set_logs l
     JOIN exercises e ON e.id = l.exercise_id
+    JOIN workout_sessions ws ON ws.id = l.session_id
+    LEFT JOIN routines r ON r.id = ws.routine_id
+    LEFT JOIN exercise_aliases mio   ON mio.exercise_id = e.id AND mio.user_id = ${userId}
+    LEFT JOIN exercise_aliases autor ON autor.exercise_id = e.id AND autor.user_id = r.author_id
     LEFT JOIN routine_exercises re ON re.id = l.routine_exercise_id
     LEFT JOIN LATERAL (
       SELECT pl.kg, pl.reps, pl.segundos
@@ -432,7 +574,12 @@ export async function getSesion(sesionId: string, userId: string): Promise<Sesio
         bloque: row.bloque,
         exerciseId: row.exercise_id,
         nombre: row.nombre,
+        alias: row.alias,
         equipo: row.equipo,
+        imagenUrl: row.imagen_url,
+        fedbId: row.fedb_id,
+        musculosPrimarios: row.musculos_primarios,
+        musculosSecundarios: row.musculos_secundarios,
         descansoS: row.descanso_s ?? s.descansoDefectoS ?? 90,
         // Si la fila de rutina ya no existe (se quitó del día mientras la
         // sesión seguía abierta), el propio registro lo delata.
@@ -564,15 +711,17 @@ export async function getSeriesPorGrupo(userId: string) {
 export async function getMarcasPersonales(userId: string, limite = 8) {
   const { rows } = await db.execute<{
     nombre: string;
+    alias: string | null;
     kg: string;
     reps: number;
     delta_kg: string;
     achieved_at: string;
   }>(sql`
     SELECT DISTINCT ON (pr.exercise_id)
-      e.nombre, pr.kg::text, pr.reps, pr.delta_kg::text, pr.achieved_at::text
+      e.nombre, a.alias, pr.kg::text, pr.reps, pr.delta_kg::text, pr.achieved_at::text
     FROM personal_records pr
     JOIN exercises e ON e.id = pr.exercise_id
+    LEFT JOIN exercise_aliases a ON a.exercise_id = e.id AND a.user_id = ${userId}
     WHERE pr.user_id = ${userId}
     ORDER BY pr.exercise_id, pr.achieved_at DESC
   `);
@@ -580,6 +729,7 @@ export async function getMarcasPersonales(userId: string, limite = 8) {
   return rows
     .map((r) => ({
       nombre: r.nombre,
+      alias: r.alias,
       kg: num(r.kg),
       reps: r.reps,
       deltaKg: num(r.delta_kg),
@@ -591,13 +741,14 @@ export async function getMarcasPersonales(userId: string, limite = 8) {
 
 /** Ejercicio destacado del gráfico de progreso: el que más veces se registró. */
 export async function getEjercicioDestacado(userId: string) {
-  const { rows } = await db.execute<{ id: string; nombre: string }>(sql`
-    SELECT e.id::text, e.nombre
+  const { rows } = await db.execute<{ id: string; nombre: string; alias: string | null }>(sql`
+    SELECT e.id::text, e.nombre, a.alias
     FROM set_logs l
     JOIN workout_sessions s ON s.id = l.session_id
     JOIN exercises e ON e.id = l.exercise_id
+    LEFT JOIN exercise_aliases a ON a.exercise_id = e.id AND a.user_id = ${userId}
     WHERE s.user_id = ${userId} AND l.done_at IS NOT NULL
-    GROUP BY e.id, e.nombre
+    GROUP BY e.id, e.nombre, a.alias
     ORDER BY count(*) DESC, e.nombre
     LIMIT 1
   `);
@@ -612,35 +763,123 @@ export async function getEjercicioDestacado(userId: string) {
  * Los ejercicios que crea la gente nacen privados (`es_publico = false`), que
  * es lo que permite el índice único parcial sobre el nombre: dos usuarios
  * pueden tener su propio "Remo con banda" sin chocar con el catálogo común.
+ *
+ * Paginado: a 656+ filas de free-exercise-db, traerlas todas de una vez es
+ * justo lo que `ExercisePhoto` no soporta bien (ver `src/components/
+ * exercise-photo.tsx`) y lo que vuelve pesada la carga inicial. `limite` y
+ * `offset` los pone la pantalla; `total` es aparte porque hace falta para
+ * dibujar los controles de página incluso cuando la página actual da 0 filas.
  */
 export async function getEjercicios(
   userId: string,
-  opts: { q?: string; grupo?: string } = {},
+  opts: { q?: string; grupo?: string; equipo?: string; limite?: number; offset?: number } = {},
 ) {
   const q = opts.q?.trim();
   const grupo = opts.grupo;
+  const equipo = opts.equipo;
+  const limite = opts.limite ?? 48;
+  const offset = opts.offset ?? 0;
+
+  const mio = aliasDe(userId, "alias_mio");
+
+  const condicion = and(
+    or(eq(exercises.esPublico, true), eq(exercises.createdBy, userId)),
+    grupo ? sql`grupo::text = ${grupo}` : undefined,
+    // Igualdad exacta, no LIKE: el valor sale de `getEquipos()`, que lo lee de
+    // la propia columna. Lo difuso ya lo cubre `q`, que también mira `equipo`.
+    equipo ? eq(exercises.equipo, equipo) : undefined,
+    // El alias entra en la búsqueda: si lo llamás "Jalón al pecho", buscar eso
+    // tiene que encontrarlo. Por eso las dos consultas llevan el mismo join.
+    q ? sql`(unaccent_ci(${exercises.nombre}) LIKE unaccent_ci(${"%" + q + "%"})
+             OR unaccent_ci(${mio.t.alias}) LIKE unaccent_ci(${"%" + q + "%"})
+             OR unaccent_ci(equipo) LIKE unaccent_ci(${"%" + q + "%"})
+             OR grupo::text ILIKE ${"%" + q + "%"})` : undefined,
+  );
+
+  const [ejercicios, totales] = await Promise.all([
+    db
+      .select({
+        id: exercises.id,
+        nombre: exercises.nombre,
+        alias: mio.t.alias,
+        grupo: exercises.grupo,
+        equipo: exercises.equipo,
+        imagenUrl: exercises.imagenUrl,
+        fedbId: exercises.fedbId,
+        nombreEn: exercises.nombreEn,
+        musculosPrimarios: exercises.musculosPrimarios,
+        musculosSecundarios: exercises.musculosSecundarios,
+        esPublico: exercises.esPublico,
+        // coalesce porque los del catálogo común tienen created_by a NULL, y
+        // `NULL = uuid` es NULL, no false.
+        esMio: sql<boolean>`coalesce(${exercises.createdBy} = ${userId}, false)`,
+      })
+      .from(exercises)
+      .leftJoin(mio.t, mio.on)
+      .where(condicion)
+      // Por el nombre que se ve, no por el del catálogo: quien usa alias espera
+      // la tarjeta en su letra. El desempate por `nombre` hace la paginación
+      // determinista — sin él, dos alias iguales pueden bailar entre páginas.
+      .orderBy(
+        asc(exercises.grupo),
+        sql`coalesce(${mio.t.alias}, ${exercises.nombre})`,
+        asc(exercises.nombre),
+      )
+      .limit(limite)
+      .offset(offset),
+    db.select({ total: count() }).from(exercises).leftJoin(mio.t, mio.on).where(condicion),
+  ]);
+
+  return { ejercicios, total: totales[0]?.total ?? 0 };
+}
+
+export type EjercicioLigero = {
+  id: string;
+  nombre: string;
+  alias: string | null;
+  grupo: string;
+  equipo: string;
+  imagenUrl: string | null;
+  fedbId: string | null;
+  esMio: boolean;
+};
+
+/**
+ * El catálogo para el selector del editor de rutinas: solo los campos que
+ * pinta `EjercicioCatalogo`, y sin paginar — el picker busca en local sobre
+ * lo que ya tiene, no pide página por página.
+ *
+ * A 656+ filas, traer también músculos, `nombre_en` y `es_publico` —lo que
+ * hace `getEjercicios()`— es peso que el picker nunca usa: una fila entera
+ * pesa varias veces más que estas seis columnas.
+ *
+ * `autorId` es quien escribió la rutina que se está editando. Va porque el
+ * selector se abre al lado de la lista del día, y esa la resuelve
+ * `cargarDias()` heredando el alias del autor: sin esto, la misma fila saldría
+ * con un nombre a la izquierda y otro a la derecha.
+ */
+export async function getCatalogoLigero(
+  userId: string,
+  autorId?: string | null,
+): Promise<EjercicioLigero[]> {
+  const mio = aliasDe(userId, "alias_mio");
+  const autor = aliasDe(autorId ?? userId, "alias_autor");
 
   return db
     .select({
       id: exercises.id,
       nombre: exercises.nombre,
+      alias: sql<string | null>`coalesce(${mio.t.alias}, ${autor.t.alias})`,
       grupo: exercises.grupo,
       equipo: exercises.equipo,
       imagenUrl: exercises.imagenUrl,
-      // coalesce porque los del catálogo común tienen created_by a NULL, y
-      // `NULL = uuid` es NULL, no false.
+      fedbId: exercises.fedbId,
       esMio: sql<boolean>`coalesce(${exercises.createdBy} = ${userId}, false)`,
     })
     .from(exercises)
-    .where(
-      and(
-        or(eq(exercises.esPublico, true), eq(exercises.createdBy, userId)),
-        grupo ? sql`grupo::text = ${grupo}` : undefined,
-        q ? sql`(unaccent_ci(nombre) LIKE unaccent_ci(${"%" + q + "%"})
-                 OR unaccent_ci(equipo) LIKE unaccent_ci(${"%" + q + "%"})
-                 OR grupo::text ILIKE ${"%" + q + "%"})` : undefined,
-      ),
-    )
+    .leftJoin(mio.t, mio.on)
+    .leftJoin(autor.t, autor.on)
+    .where(or(eq(exercises.esPublico, true), eq(exercises.createdBy, userId)))
     .orderBy(asc(exercises.grupo), asc(exercises.nombre));
 }
 
@@ -659,19 +898,46 @@ export type UsoEjercicio = { rutinas: number; series: number };
  * Sirve para avisar antes de intentar borrar: `routine_exercises.exercise_id` y
  * `set_logs.exercise_id` son ON DELETE RESTRICT, así que la base lo impediría
  * igual, pero con un error de clave ajena en vez de una frase.
+ *
+ * Agregado con GROUP BY, no una subconsulta correlacionada por fila: con el
+ * catálogo de free-exercise-db (656+ filas cuando `todos`), dos subconsultas
+ * por fila son 1.300+ ejecuciones — y la de `set_logs` no tiene índice usable
+ * (el que hay es parcial, `WHERE done_at IS NOT NULL`), así que cada una es un
+ * recorrido secuencial completo. Agrupado, cada tabla se recorre una vez.
  */
 export async function getUsosEjerciciosPropios(
   userId: string,
+  /**
+   * Un admin puede editar y borrar todo el catálogo, así que necesita los usos
+   * de todo: el aviso de "está en N rutinas" cuelga de estos números, y sin
+   * ellos las tarjetas del catálogo común ofrecerían borrar sin advertir nada.
+   */
+  todos = false,
 ): Promise<Record<string, UsoEjercicio>> {
   const { rows } = await db.execute<{ id: string; rutinas: string; series: string }>(sql`
-    SELECT e.id::text AS id,
-           (SELECT count(DISTINCT d.routine_id)
-              FROM routine_exercises re
-              JOIN routine_days d ON d.id = re.routine_day_id
-             WHERE re.exercise_id = e.id)::text AS rutinas,
-           (SELECT count(*) FROM set_logs l WHERE l.exercise_id = e.id)::text AS series
-      FROM exercises e
-     WHERE e.created_by = ${userId} AND NOT e.es_publico
+    WITH visibles AS (
+      SELECT id FROM exercises e
+      WHERE ${todos ? sql`true` : sql`e.created_by = ${userId} AND NOT e.es_publico`}
+    ),
+    rutinas AS (
+      SELECT re.exercise_id, count(DISTINCT d.routine_id) AS n
+        FROM routine_exercises re
+        JOIN routine_days d ON d.id = re.routine_day_id
+       WHERE re.exercise_id IN (SELECT id FROM visibles)
+       GROUP BY re.exercise_id
+    ),
+    series AS (
+      SELECT exercise_id, count(*) AS n
+        FROM set_logs
+       WHERE exercise_id IN (SELECT id FROM visibles)
+       GROUP BY exercise_id
+    )
+    SELECT v.id::text AS id,
+           coalesce(r.n, 0)::text AS rutinas,
+           coalesce(s.n, 0)::text AS series
+      FROM visibles v
+      LEFT JOIN rutinas r ON r.exercise_id = v.id
+      LEFT JOIN series s ON s.exercise_id = v.id
   `);
 
   return Object.fromEntries(
@@ -680,10 +946,75 @@ export async function getUsosEjerciciosPropios(
 }
 
 /** Equipamientos ya usados, para sugerirlos al dar de alta un ejercicio. */
-export async function getEquipos() {
+/**
+ * Un ejercicio del catálogo, con dónde se está usando.
+ *
+ * Mismo criterio de visibilidad que `getEjercicios()` —público o mío—, y por
+ * eso pide `userId`: sin él, la página de detalle sería una forma de leer los
+ * ejercicios privados de cualquiera sabiendo su id.
+ *
+ * Las rutinas salen con nombre y no solo contadas: en el detalle lo útil es
+ * "está en Fuerza intermedia 5×", no "está en 1 rutina". Se limita a las del
+ * propio usuario, que son las únicas que puede abrir.
+ */
+export async function getEjercicio(exerciseId: string, userId: string) {
+  const mio = aliasDe(userId, "alias_mio");
+
+  const [row] = await db
+    .select({ ejercicio: exercises, alias: mio.t.alias })
+    .from(exercises)
+    .leftJoin(mio.t, mio.on)
+    .where(
+      and(
+        eq(exercises.id, exerciseId),
+        or(eq(exercises.esPublico, true), eq(exercises.createdBy, userId)),
+      ),
+    )
+    .limit(1);
+
+  if (!row) return null;
+  const fila = row.ejercicio;
+
+  const rutinas = await db
+    .selectDistinct({ id: routines.id, nombre: routines.nombre })
+    .from(routineExercises)
+    .innerJoin(routineDays, eq(routineDays.id, routineExercises.routineDayId))
+    .innerJoin(routines, eq(routines.id, routineDays.routineId))
+    .where(and(eq(routineExercises.exerciseId, exerciseId), eq(routines.ownerId, userId)))
+    .orderBy(asc(routines.nombre));
+
+  const [{ series } = { series: 0 }] = await db
+    .select({ series: count() })
+    .from(setLogs)
+    .innerJoin(workoutSessions, eq(workoutSessions.id, setLogs.sessionId))
+    .where(
+      and(
+        eq(setLogs.exerciseId, exerciseId),
+        eq(workoutSessions.userId, userId),
+        isNotNull(setLogs.doneAt),
+      ),
+    );
+
+  return {
+    ...fila,
+    alias: row.alias,
+    esMio: fila.createdBy === userId,
+    rutinas,
+    /** Series confirmadas por este usuario, en cualquier rutina. */
+    series,
+  };
+}
+
+/**
+ * Sin filtrar por visibilidad enseñaba el `equipo` de ejercicios privados de
+ * otros usuarios: `DISTINCT` sobre toda la tabla, no sobre lo que este
+ * usuario puede ver. Mismo criterio que `getEjercicios()` — público o mío.
+ */
+export async function getEquipos(userId: string) {
   const filas = await db
     .selectDistinct({ equipo: exercises.equipo })
     .from(exercises)
+    .where(or(eq(exercises.esPublico, true), eq(exercises.createdBy, userId)))
     .orderBy(asc(exercises.equipo));
   return filas.map((f) => f.equipo);
 }

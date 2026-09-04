@@ -49,6 +49,16 @@ ALTER TABLE set_logs
 -- El mismo criterio está replicado en src/lib/format.ts para el arranque desde
 -- la app. Si tocás uno, tocá el otro.
 
+-- La 07 sustituyó estas dos por versiones de dos parámetros, el segundo con
+-- valor por defecto. En una base donde ya corrió, volver a crear aquí las de
+-- un parámetro dejaba las dos formas convivendo, y entonces la llamada de un
+-- argumento de más abajo no sabía a cuál ir: «function segundos_planificados
+-- (text) is not unique». Se tiran primero, así esta migración vuelve a ser
+-- idempotente; la 07 corre después en el mismo `db:migrate` y deja puestas las
+-- suyas, que son las buenas.
+DROP FUNCTION IF EXISTS reps_planificadas(text, int);
+DROP FUNCTION IF EXISTS segundos_planificados(text, int);
+
 -- '8' → 8 · '8-12' → 8 · '' → 10.
 CREATE OR REPLACE FUNCTION reps_planificadas(p_reps text) RETURNS smallint
 LANGUAGE sql IMMUTABLE AS $$

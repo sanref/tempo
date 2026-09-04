@@ -8,10 +8,11 @@ export default function Loading() {
         <Sk ancho="420px" alto="boton" style={{ maxWidth: "100%" }} />
       </div>
 
-      <SkFiltros n={6} />
+      {/* "Todos" + los 8 grupos del enum. */}
+      <SkFiltros n={9} />
 
       <div className="library-grid">
-        {Array.from({ length: 8 }, (_, i) => (
+        {Array.from({ length: 12 }, (_, i) => (
           <div className="library-card" key={i}>
             <div className="sk library-thumb" />
             <div className="library-body">

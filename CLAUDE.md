@@ -77,6 +77,34 @@ sumarlos. Ya existen: `session_summaries`, `volumen_semanal()`,
 **Los ejercicios son un catálogo, no texto.** `set_logs.exercise_id` apunta a
 `exercises`. Sin eso no hay progreso por ejercicio a través de rutinas.
 
+**Un ejercicio tiene un nombre y puede tener un alias por persona.** El
+nombre vive en `exercises` y es de todos; el alias, en `exercise_aliases`
+(`user_id`, `exercise_id`) y es de uno. Hacía falta porque el catálogo viene de
+free-exercise-db y está en inglés: "Wide-Grip Lat Pulldown" no es como nadie
+llama al jalón, y renombrar la fila se lo cambia a todo el mundo.
+
+Se resuelve `coalesce(el mío, el del autor de la rutina, exercises.nombre)`. El
+segundo es lo que hace que el alumno vea el léxico de su entrenador dentro del
+plan que él le escribió, y va por `routines.author_id` — **no** por
+`users.coach_id`: en la biblioteca, el progreso y las marcas manda uno, y
+desvincularse no renombra media app de golpe. Quien resuelve el par son
+`cargarDias()` y `getSesion()`; el resto de lecturas solo miran el propio.
+
+El alias es **presentación pura**: nada resuelve un id por él, y por eso
+`guardarAlias()` no pasa por `ejercicioEditable()` —cualquiera le pone su
+nombre a una fila del catálogo común— y el FK contra `exercises` es CASCADE, no
+RESTRICT como los de `routine_exercises` y `set_logs`: un alias no puede
+impedir borrar un ejercicio que no usa nadie.
+
+**El nombre real nunca se esconde.** Con alias se pinta el alias y debajo, en
+`.nombre-real`, el del catálogo — es el único ancla común entre dos personas
+que llaman distinto al mismo movimiento, y el que sale en el buscador del
+catálogo externo y en el SQL. Lo pinta `<ExerciseName>` y nadie más; donde solo
+cabe una cadena (`aria-label`, `alt`, títulos de diálogo) va `nombreVisible()`.
+En la cabecera de bloque de la sesión el nombre real se cuela en la línea del
+equipamiento en vez de abrir una tercera: con siete a nueve bloques cada línea
+de más alarga el scroll.
+
 **El catálogo tiene una parte común y una privada.** Lo que da de alta un
 usuario nace con `es_publico = false` y `created_by = él`; el índice único de
 nombres es parcial (`... WHERE es_publico`), así que dos personas pueden tener
@@ -84,6 +112,79 @@ su propio "Remo con banda" sin chocar. Por eso `getEjercicios()` exige un
 `userId` y filtra por *público o mío*: si alguna vez volvés a filtrar solo por
 `es_publico`, los ejercicios propios desaparecen de la biblioteca y del editor
 sin dar ningún error.
+
+**El catálogo común lo arregla el admin, y solo él.** Cualquiera edita y borra
+*lo suyo y privado*; un admin puede tocar cualquier ejercicio, públicos
+incluidos, además de publicar y despublicar. La puerta única es
+`ejercicioEditable()` en `actions.ts` — no la pantalla, que solo decide si
+enseña los botones. Hacía falta porque todo lo que vino del seed tiene
+`created_by` a NULL: no era de nadie, y una errata o una foto mal enlazada solo
+se arreglaba entrando por SQL.
+
+Se abren UPDATE y DELETE, **no SELECT**: un admin sigue viendo lo mismo que los
+demás. Poder arreglar el catálogo compartido no es poder leer los ejercicios
+privados de cada persona.
+
+**Despublicar adopta lo que no tiene dueño.** `getEjercicios()` filtra por
+público-o-mío, así que quitar del catálogo común una fila con `created_by` NULL
+la dejaría invisible para todo el mundo, admin incluido — existiendo en la base
+y sin ninguna pantalla desde la que volver. Por eso `editarEjercicio()` le pone
+de dueño a quien la despublica. Y al revés, al publicar hay que comprobar el
+nombre contra *todos* los públicos aunque la fila hoy sea privada: es el choque
+que da el índice único parcial. Las dos cosas las hace `nombreRepetido()`, que
+razona sobre **cómo va a quedar la fila**, no cómo está.
+
+**Las fotos y los músculos vienen de fuera, y el enlace es lo que se guarda.**
+`exercises.fedb_id` apunta al catálogo de free-exercise-db (dominio público) y
+de él se arman las dos fotos del movimiento — sus rutas son siempre
+`{fedb_id}/0.jpg` y `/1.jpg`. Los diagramas son de wger (CC-BY-SA 3.0, **la
+atribución del pie de `/ejercicios` es parte de la licencia, no adorno**).
+Quien arma todas esas URLs es `src/lib/ejercicios-externos.ts` y nadie más:
+mudar las fotos de sitio tiene que ser tocar ese archivo solo.
+
+El orden al pintar es `imagen_url` (foto propia) → fotos de `fedb_id` →
+"Imagen pendiente". Y ojo con el léxico: `musculos_primarios` y
+`musculos_secundarios` guardan las 17 etiquetas **en inglés y en minúsculas**
+de free-exercise-db porque son la clave contra los SVG de wger, no texto para
+enseñar; lo que se lee sale traducido de ese mismo módulo.
+
+Cinco de las diecisiete (`abductors`, `adductors`, `forearms`, `lower back`,
+`neck`) no tienen SVG en wger y solo aparecen como texto. Es a propósito: media
+respuesta es mejor que ninguna.
+
+**En la sesión la foto se ve a petición, no fija.** La cabecera de cada bloque
+lleva la miniatura de 52 px y al tocarla se abre un diálogo con la foto grande
+y los músculos. Fija y grande no: con siete a nueve ejercicios por sesión la
+pantalla se convierte en un scroll largo, y entre serie y serie lo que se
+quiere es llegar a los campos. El diálogo es **solo lectura** — esa pantalla
+tiene una cola de escritura detrás y conviene que lo que se le añada no
+escriba nada.
+
+Si un ejercicio no tiene ni foto ni músculos no se pinta el botón: abrirlo
+daría una caja vacía.
+
+**El dibujo vive en `/ejercicios/[id]`, no en la rejilla.** `MuscleDiagram`
+tiene un modo `compacto` que se salta las siluetas y deja solo los nombres, y
+es el que usa la biblioteca: dos siluetas legibles piden más ancho del que da
+una tarjeta de 230 px, y multiplicarlas por sesenta y nueve hace la página
+inmanejable. Solo se pinta la silueta que tiene algo que enseñar — para un curl
+de bíceps la espalda no aparece, porque una silueta en blanco parece un fallo
+de carga.
+
+Los SVG de wger se apilan como **máscaras** (`mask-image`), no como imágenes:
+traen su propio rojo y el nuestro tiene que ser `--color-accent`. Así el color
+sale del token y el asset se queda intacto, que con una licencia share-alike es
+lo cómodo.
+
+**Los ejercicios enlazados se generan, no se escriben.** El matcheo entre
+nuestros nombres en español y los suyos en inglés está curado a mano en
+`db/enlaces-fedb.tsv`, y de ahí sale el SQL con
+`node scripts/generar-enlaces-fedb.mjs --escribir`. Lo escribe **en dos
+sitios** —`db/08_ejercicios_externos.sql` y `db/99_seed.sql`, entre marcas—
+porque `db:migrate` corre las migraciones y `db:reset` no: si el bloque
+estuviera solo en la migración, una base recién creada se quedaría sin una sola
+foto. Editar cualquiera de los dos a mano se pierde en la siguiente
+regeneración; se edita el TSV.
 
 **Una plancha no son repeticiones.** `routine_exercises.tipo` distingue `reps`
 de `tiempo`. En los bloques por tiempo, `set_logs.reps` se queda en 0 y lo que
@@ -260,14 +361,20 @@ pestañas inferior y desaparece la navegación de la cabecera.
 
 ```
 db/01_schema.sql              tablas, tipos, índices, vistas, funciones, trigger y políticas
-db/02_….sql                   migraciones, numeradas de 02 a 98
-db/99_seed.sql                datos del prototipo
+db/02_….sql                   migraciones, numeradas de 02 a 98 (la 09 abre el catálogo al admin, la 11 trae los alias)
+db/99_seed.sql                datos del prototipo (lleva los enlaces al catálogo externo)
+db/enlaces-fedb.tsv           el matcheo español→inglés, curado a mano
+db/fedb-catalogo.json         copia recortada de free-exercise-db (no baja al navegador)
+scripts/generar-enlaces-fedb.mjs  de ese TSV sale el SQL de la 08 y del seed
+public/musculos/              los SVG de wger, copiados para que el SW los cachee
 src/proxy.ts                  refresca el token y corta el paso sin sesión (Edge)
 src/app/layout.tsx            solo el documento — no lee la sesión, ver Auth
 src/app/login/               entrar y crear cuenta (fuera del grupo (app))
 src/app/offline/page.tsx      último recurso del service worker (estática)
 src/app/(app)/layout.tsx      cabecera, shell y pestañas; exige sesión
 src/app/(app)/*/page.tsx      una pantalla por ruta, Server Components
+src/app/(app)/ejercicios/[id]/  detalle: foto grande y diagrama de musculos
+src/app/(app)/ejercicios/alias-ejercicio.tsx  "mi nombre" para un ejercicio
 src/app/(app)/*/loading.tsx   esqueleto de esa pantalla, con su misma rejilla
 src/app/(app)/coach/invitaciones.tsx  códigos que reparte el entrenador
 src/app/(app)/coach/canjear.tsx       donde el alumno canjea, y se va
@@ -278,12 +385,18 @@ src/app/actions.ts            TODAS las mutaciones, sesión incluida
 src/app/(app)/entrenar/[sesionId]/session-client.tsx   la pieza compleja: cola offline
 src/components/skeleton.tsx   piezas de los loading.tsx
 src/components/exercise-form.tsx  alta de ejercicio, compartida por biblioteca y editor
+src/components/exercise-name.tsx    el alias arriba y el nombre del catálogo debajo
+src/components/exercise-photo.tsx   las dos fotos del movimiento, alternándose
+src/components/muscle-diagram.tsx   músculos trabajados sobre las siluetas
 src/components/sw-register.tsx  registra el SW (solo en producción)
 public/sw.js                  caché de shell, sin build step
 src/db/queries.ts             una función de lectura por bloque de pantalla
 src/lib/auth.ts               punto único de acoplamiento con la autenticación
 src/lib/supabase/server.ts    cliente de Supabase atado a las cookies (solo auth)
 src/lib/format.ts             formato es-ES
+src/lib/ejercicios-externos.ts  único sitio que sabe dónde viven fotos y diagramas
+src/lib/catalogo-externo.ts   el catálogo de free-exercise-db en memoria (¡solo servidor!)
+src/lib/catalogo-glosario.ts  glosario es→en y puntuación; lo comparte el script
 ```
 
 ## Auth
@@ -343,20 +456,27 @@ comprobar permisos en un test** — comprobá el cuerpo.
 
 Por orden de valor:
 
-1. **Fotos de ejercicios.** Hoy se pinta el placeholder "Imagen pendiente" del
-   diseño; las reales van envueltas en `.grayscale`. El alta de ejercicio
-   todavía no pide imagen: `imagen_url` se queda a NULL.
-2. **Filtros de rutinas por tipo** (Fuerza / Hipertrofia): hace falta una
+1. **Subir una foto propia.** Enlazar al catálogo externo ya se puede desde el
+   formulario, pero `imagen_url` —la foto propia, que pisa a la del catálogo—
+   sigue sin tener por dónde entrar. Es lo que hace falta para los ejercicios
+   que no existen en ningún dataset.
+2. **Las fotos a Supabase Storage.** Hoy van hotlinkeadas a jsDelivr y el
+   service worker no cachea lo que no es del propio origen, así que **en el
+   gimnasio sin cobertura no cargan** — justo donde más falta hacen. Solo hay
+   que bajar las de los ejercicios enlazados (~65 × 2 ≈ 10 MB, no los 120 MB
+   del dataset) y cambiar `BASE_FOTOS` en `src/lib/ejercicios-externos.ts`, que
+   es el único sitio que arma esas URLs. Hace falta una service-role key nueva.
+3. **Filtros de rutinas por tipo** (Fuerza / Hipertrofia): hace falta una
    columna de etiquetas, hoy el filtro es por estado.
-3. **Navegación offline entre pantallas.** El service worker guarda documentos,
+4. **Navegación offline entre pantallas.** El service worker guarda documentos,
    pero los payloads RSC van siempre a red: sin cobertura, tocar un enlace cae
    en navegación completa contra el caché. Funciona, pero parpadea.
-4. **Invitaciones en el móvil.** El canje solo existe en el web. `coach_invites`
+5. **Invitaciones en el móvil.** El canje solo existe en el web. `coach_invites`
    tiene RLS y políticas para que el entrenador vea las suyas, pero el canje no
    tiene política a propósito: leer la fila de otro dejaría enumerar códigos
    ajenos desde el navegador. Cuando el móvil lo necesite, va como función
    `SECURITY DEFINER`, no como política.
-5. **Traspasar alumnos entre entrenadores.** Hoy soltar y volver a vincular son
+6. **Traspasar alumnos entre entrenadores.** Hoy soltar y volver a vincular son
    dos pasos con un código de por medio; no hay forma de pasarle un alumno a un
    colega de una vez.
 

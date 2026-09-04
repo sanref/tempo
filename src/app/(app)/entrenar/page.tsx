@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { empezarSesion } from "@/app/actions";
+import { ExerciseName } from "@/components/exercise-name";
 import { getProximoDia, getSesionEnCurso } from "@/db/queries";
 import { getCurrentUser } from "@/lib/auth";
 import { carga } from "@/lib/format";
@@ -48,7 +49,7 @@ export default async function EntrenarPage() {
         <div className="rows">
           {dia.ejercicios.map((e) => (
             <div className="row" key={e.id}>
-              <span>{e.nombre}</span>
+              <ExerciseName nombre={e.nombre} alias={e.alias} />
               <span className="text-muted">
                 {e.series} × {e.reps} · {carga(e.cargaKg, e.cargaTexto)}
               </span>

@@ -14,6 +14,7 @@ import {
   numeric,
   pgEnum,
   pgTable,
+  primaryKey,
   smallint,
   text,
   timestamp,
@@ -76,12 +77,54 @@ export const exercises = pgTable(
     nombre: text("nombre").notNull(),
     grupo: muscleGroup("grupo").notNull(),
     equipo: text("equipo").notNull(),
+    // Foto propia; pisa a la del catálogo externo.
     imagenUrl: text("imagen_url"),
+    // Enlace a free-exercise-db: de aquí salen las dos fotos del movimiento.
+    fedbId: text("fedb_id"),
+    // No se deriva de `fedbId` — ver el comentario en db/01_schema.sql.
+    nombreEn: text("nombre_en"),
+    // Léxico en inglés de free-exercise-db; clave para el diagrama muscular.
+    musculosPrimarios: text("musculos_primarios").array(),
+    musculosSecundarios: text("musculos_secundarios").array(),
     esPublico: boolean("es_publico").notNull().default(true),
     createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("exercises_grupo_idx").on(t.grupo)],
+  (t) => [
+    index("exercises_grupo_idx").on(t.grupo),
+    // Un fedb_id no puede estar en dos filas públicas — ver db/01_schema.sql.
+    uniqueIndex("exercises_fedb_id_key")
+      .on(t.fedbId)
+      .where(sql`${t.fedbId} is not null and ${t.esPublico}`),
+  ],
+);
+
+/**
+ * Cómo llama UNA persona a un ejercicio. No toca el catálogo ni lo ve nadie
+ * más; se resuelve `coalesce(el mío, el del autor de la rutina, el nombre)`.
+ *
+ * Presentación pura: nada resuelve un id por el alias. El FK contra
+ * `exercises` es CASCADE —no RESTRICT como los de `routine_exercises` y
+ * `set_logs`— porque un alias no puede impedir borrar un ejercicio sin uso.
+ */
+export const exerciseAliases = pgTable(
+  "exercise_aliases",
+  {
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    exerciseId: uuid("exercise_id")
+      .notNull()
+      .references(() => exercises.id, { onDelete: "cascade" }),
+    alias: text("alias").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // La PK es además el índice de los dos joins de lectura: el mío y el del
+    // autor de la rutina.
+    primaryKey({ columns: [t.userId, t.exerciseId] }),
+    index("exercise_aliases_exercise_idx").on(t.exerciseId),
+  ],
 );
 
 export const routines = pgTable(
@@ -267,6 +310,11 @@ export const usersRelations = relations(users, ({ one, many }) => ({
   sesiones: many(workoutSessions),
 }));
 
+export const exerciseAliasesRelations = relations(exerciseAliases, ({ one }) => ({
+  usuario: one(users, { fields: [exerciseAliases.userId], references: [users.id] }),
+  ejercicio: one(exercises, { fields: [exerciseAliases.exerciseId], references: [exercises.id] }),
+}));
+
 export const routinesRelations = relations(routines, ({ one, many }) => ({
   owner: one(users, { fields: [routines.ownerId], references: [users.id] }),
   author: one(users, { fields: [routines.authorId], references: [users.id] }),
@@ -308,6 +356,7 @@ export const setLogsRelations = relations(setLogs, ({ one }) => ({
 
 export type User = typeof users.$inferSelect;
 export type Exercise = typeof exercises.$inferSelect;
+export type ExerciseAlias = typeof exerciseAliases.$inferSelect;
 export type Routine = typeof routines.$inferSelect;
 export type RoutineDay = typeof routineDays.$inferSelect;
 export type RoutineExercise = typeof routineExercises.$inferSelect;

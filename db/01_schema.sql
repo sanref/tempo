@@ -62,12 +62,32 @@ CREATE INDEX users_auth_id_idx ON users (auth_id);
 -- Catálogo separado desde el día uno: sin esto no hay forma de responder
 -- "¿cómo progresé en press banca?" a través de rutinas distintas.
 
+-- `grupo` es el grupo grueso que ordena la biblioteca (ocho valores, en
+-- español). Los `musculos_*` son otra cosa: el detalle fino que viene del
+-- catálogo externo y alimenta el diagrama. Uno no sustituye al otro — 'Brazo'
+-- no distingue bíceps de tríceps, y el diagrama sí.
 CREATE TABLE exercises (
   id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   nombre       text NOT NULL,
   grupo        muscle_group NOT NULL,
   equipo       text NOT NULL,
-  imagen_url   text,                     -- NULL ⇒ la UI pinta "Imagen pendiente"
+  -- Foto propia. Pisa a la del catálogo externo; hoy nadie la escribe todavía.
+  imagen_url   text,
+  -- Enlace al catálogo de free-exercise-db (dominio público). El id de allí es
+  -- el nombre en inglés con guiones bajos ('Barbell_Squat_To_A_Bench') y las
+  -- rutas de sus fotos son siempre '{fedb_id}/0.jpg' y '/1.jpg', así que esta
+  -- sola columna da las dos fotos. NULL ⇒ sin enlazar, la UI pinta
+  -- "Imagen pendiente".
+  fedb_id      text,
+  -- El nombre en inglés NO se deriva de `fedb_id`: 35 de los 873 pierden
+  -- puntuación al convertir ('Adductor_Groin' es "Adductor/Groin"). Por eso
+  -- viaja aparte en vez de calcularse.
+  nombre_en    text,
+  -- Léxico cerrado de 17 valores de free-exercise-db ('quadriceps', 'lats'…),
+  -- en inglés y en minúsculas a propósito: son la clave contra la tabla que
+  -- los traduce a los SVG de wger, no texto para enseñar.
+  musculos_primarios   text[],
+  musculos_secundarios text[],
   es_publico   boolean NOT NULL DEFAULT true,
   created_by   uuid REFERENCES users (id) ON DELETE SET NULL,
   created_at   timestamptz NOT NULL DEFAULT now()
@@ -76,6 +96,10 @@ CREATE TABLE exercises (
 -- Nombre único dentro del catálogo público; los privados se distinguen por dueño.
 CREATE UNIQUE INDEX exercises_nombre_publico_key
   ON exercises (lower(nombre)) WHERE es_publico;
+-- Un fedb_id no puede estar en dos filas públicas: sin esto, importar el
+-- catálogo de free-exercise-db dos veces lo duplica entero sin quejarse.
+CREATE UNIQUE INDEX exercises_fedb_id_key
+  ON exercises (fedb_id) WHERE fedb_id IS NOT NULL AND es_publico;
 CREATE INDEX exercises_grupo_idx ON exercises (grupo);
 
 -- Normalización para buscar sin acentos ni mayúsculas. Se hace con translate()
@@ -88,6 +112,32 @@ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
 $$;
 
 CREATE INDEX exercises_busqueda_idx ON exercises (unaccent_ci(nombre) text_pattern_ops);
+
+-- ── Alias de ejercicio ─────────────────────────────────────────────────────
+-- El mismo movimiento se llama distinto en cada gimnasio. Un alias es cómo lo
+-- llama UNA persona; no toca el catálogo ni lo ve nadie más.
+--
+-- Es presentación pura: nada resuelve un id por el alias, no entra en
+-- `routine_exercises` ni en `set_logs`, y borrarlo devuelve el nombre del
+-- catálogo. Por eso vive en su propia tabla y no en una columna de `exercises`,
+-- que es común a todos.
+
+CREATE TABLE exercise_aliases (
+  user_id     uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  -- CASCADE, no RESTRICT: un alias no puede impedir borrar un ejercicio que no
+  -- usa nadie. `borrarEjercicio()` solo cuenta rutinas y series registradas.
+  exercise_id uuid NOT NULL REFERENCES exercises (id) ON DELETE CASCADE,
+  alias       text NOT NULL CHECK (length(btrim(alias)) BETWEEN 2 AND 80),
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  -- Un alias por persona y ejercicio. La PK es además el índice de los dos
+  -- joins de lectura: el mío y el del autor de la rutina.
+  PRIMARY KEY (user_id, exercise_id)
+);
+
+CREATE INDEX exercise_aliases_exercise_idx ON exercise_aliases (exercise_id);
+-- Acompaña a exercises_busqueda_idx: el buscador de /ejercicios mira los dos.
+CREATE INDEX exercise_aliases_busqueda_idx
+  ON exercise_aliases (unaccent_ci(alias) text_pattern_ops);
 
 -- ── Rutinas ────────────────────────────────────────────────────────────────
 
@@ -470,6 +520,7 @@ CREATE TRIGGER routines_touch
 
 ALTER TABLE users             ENABLE ROW LEVEL SECURITY;
 ALTER TABLE exercises         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE exercise_aliases  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE routines          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE routine_days      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE routine_exercises ENABLE ROW LEVEL SECURITY;
@@ -555,6 +606,18 @@ RETURNS uuid AS $body$
 $body$ LANGUAGE sql STABLE SECURITY DEFINER;
 $fn$;
 
+-- El rol sale de `users` y no del JWT: Supabase copia el rol en
+-- `user_metadata` al registrarse y no lo vuelve a tocar, así que un ascenso a
+-- admin no se vería hasta que la persona volviera a entrar.
+EXECUTE $fn$
+CREATE OR REPLACE FUNCTION public.es_admin()
+RETURNS boolean AS $body$
+  SELECT coalesce(
+    (SELECT role = 'admin' FROM public.users WHERE auth_id = auth.uid() LIMIT 1),
+    false);
+$body$ LANGUAGE sql STABLE SECURITY DEFINER;
+$fn$;
+
 -- Políticas. RLS quedó activada más arriba; esto es lo que abre la puerta,
 -- fila a fila. Se escriben con DROP + CREATE para que este bloque sea
 -- reejecutable tal cual está en db/04_auth.sql.
@@ -574,13 +637,48 @@ EXECUTE 'CREATE POLICY exercises_select_visible ON exercises FOR SELECT TO authe
 EXECUTE 'DROP POLICY IF EXISTS exercises_insert_own ON exercises';
 EXECUTE 'CREATE POLICY exercises_insert_own ON exercises FOR INSERT TO authenticated
            WITH CHECK (created_by = public.current_user_id())';
+-- Editar y borrar: lo propio, y para un admin también el catálogo común —
+-- que no es de nadie (created_by es NULL en todo lo del seed) y si no,
+-- no habría forma de arreglar una errata sin entrar por SQL.
+-- SELECT no se abre: poder arreglar lo compartido no es poder leer lo privado
+-- de cada persona.
 EXECUTE 'DROP POLICY IF EXISTS exercises_update_own ON exercises';
 EXECUTE 'CREATE POLICY exercises_update_own ON exercises FOR UPDATE TO authenticated
-           USING (created_by = public.current_user_id())
-           WITH CHECK (created_by = public.current_user_id())';
+           USING (created_by = public.current_user_id() OR public.es_admin())
+           WITH CHECK (created_by = public.current_user_id() OR public.es_admin())';
 EXECUTE 'DROP POLICY IF EXISTS exercises_delete_own ON exercises';
 EXECUTE 'CREATE POLICY exercises_delete_own ON exercises FOR DELETE TO authenticated
-           USING (created_by = public.current_user_id())';
+           USING (created_by = public.current_user_id() OR public.es_admin())';
+
+-- exercise_aliases: lo mío, más lo de quien escribió una rutina que tengo
+-- asignada y viva. Ese segundo caso es el que hace que el alias del entrenador
+-- llegue al alumno, y es el mismo criterio que aplica el web al resolver el
+-- nombre — escrito como política para que el móvil pueda resolverlo solo.
+--
+-- Escribir, solo lo mío: el alias de otro no se toca nunca, ni siendo admin.
+-- Un admin arregla el catálogo común, que es de todos; un alias es de uno.
+EXECUTE 'DROP POLICY IF EXISTS exercise_aliases_select_visible ON exercise_aliases';
+EXECUTE 'CREATE POLICY exercise_aliases_select_visible ON exercise_aliases
+           FOR SELECT TO authenticated
+           USING (user_id = public.current_user_id()
+                  OR EXISTS (SELECT 1 FROM assignments a
+                               JOIN routines r ON r.id = a.routine_id
+                              WHERE a.client_id = public.current_user_id()
+                                AND a.ended_on IS NULL
+                                AND r.author_id = exercise_aliases.user_id))';
+EXECUTE 'DROP POLICY IF EXISTS exercise_aliases_insert_own ON exercise_aliases';
+EXECUTE 'CREATE POLICY exercise_aliases_insert_own ON exercise_aliases
+           FOR INSERT TO authenticated
+           WITH CHECK (user_id = public.current_user_id())';
+EXECUTE 'DROP POLICY IF EXISTS exercise_aliases_update_own ON exercise_aliases';
+EXECUTE 'CREATE POLICY exercise_aliases_update_own ON exercise_aliases
+           FOR UPDATE TO authenticated
+           USING (user_id = public.current_user_id())
+           WITH CHECK (user_id = public.current_user_id())';
+EXECUTE 'DROP POLICY IF EXISTS exercise_aliases_delete_own ON exercise_aliases';
+EXECUTE 'CREATE POLICY exercise_aliases_delete_own ON exercise_aliases
+           FOR DELETE TO authenticated
+           USING (user_id = public.current_user_id())';
 
 -- routines: propias, o escritas por uno como entrenador.
 EXECUTE 'DROP POLICY IF EXISTS routines_select_own ON routines';

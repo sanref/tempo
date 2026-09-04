@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Plus, Trash2 } from "lucide-react";
+import { Check, Maximize2, Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 
 import {
@@ -11,7 +11,10 @@ import {
   terminarSesion,
   type SerieEntrada,
 } from "@/app/actions";
-import { miles, mmss } from "@/lib/format";
+import { ExerciseName, nombreVisible } from "@/components/exercise-name";
+import { ExercisePhoto } from "@/components/exercise-photo";
+import { MuscleDiagram } from "@/components/muscle-diagram";
+import { conFecha, fechaInput, miles, mmss } from "@/lib/format";
 
 type Serie = {
   id: string;
@@ -28,7 +31,13 @@ type Bloque = {
   bloque: number;
   exerciseId: string;
   nombre: string;
+  /** El de quien entrena, o el de quien le escribió la rutina. */
+  alias: string | null;
   equipo: string;
+  imagenUrl: string | null;
+  fedbId: string | null;
+  musculosPrimarios: string[] | null;
+  musculosSecundarios: string[] | null;
   descansoS: number;
   tipo: "reps" | "tiempo";
   series: Serie[];
@@ -78,17 +87,37 @@ export function SessionClient({
   const [descansoHasta, setDescansoHasta] = useState<number | null>(null);
   const [sinConexion, setSinConexion] = useState(false);
   const [confirmando, setConfirmando] = useState(false);
+  /** Bloque cuya foto se está viendo en grande, o null. */
+  const [verFoto, setVerFoto] = useState<number | null>(null);
   const [terminando, iniciarTerminar] = useTransition();
+
+  // El día del entrenamiento y el que trae la sesión, para saber si se movió.
+  // Los dos vacíos hasta montar: el día depende de la zona horaria de quien
+  // entrena y formatearlo al renderizar daría un desajuste de hidratación.
+  const [fecha, setFecha] = useState("");
+  const [fechaOriginal, setFechaOriginal] = useState("");
+  const [hoy, setHoy] = useState("");
 
   const claveCola = `tempo:sesion:${sesionId}:cola`;
   const claveDescanso = `tempo:sesion:${sesionId}:descanso`;
+  const claveFecha = `tempo:sesion:${sesionId}:fecha`;
 
   const cola = useRef(new Map<string, SerieEntrada>());
   const temporizador = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Rehidratación: la cola pendiente manda sobre lo que trajo el servidor ──
   useEffect(() => {
+    const propia = fechaInput(new Date(startedAt));
+    setFechaOriginal(propia);
+    setFecha(propia);
+    setHoy(fechaInput(new Date()));
+
     try {
+      // Un día elegido y no aplicado todavía: se manda al cerrar, así que si
+      // la pestaña murió antes hay que recuperarlo como el resto de la cola.
+      const elegida = localStorage.getItem(claveFecha);
+      if (elegida) setFecha(elegida);
+
       const guardada = localStorage.getItem(claveCola);
       if (guardada) {
         const entradas: SerieEntrada[] = JSON.parse(guardada);
@@ -285,11 +314,45 @@ export function SessionClient({
     [sesionId],
   );
 
+  /**
+   * El día elegido, ya resuelto a un instante, o `undefined` si no se movió.
+   *
+   * Se resuelve aquí y no en el servidor porque la zona horaria que vale es la
+   * del navegador: `conFecha()` conserva la hora de la sesión y solo le cambia
+   * el día.
+   */
+  const fechaElegida = () =>
+    fecha && fecha !== fechaOriginal
+      ? conFecha(new Date(startedAt), fecha).toISOString()
+      : undefined;
+
+  /**
+   * El día se guarda en local y viaja al cerrar, no al elegirlo.
+   *
+   * Mientras la sesión corre el reloj es `now() - started_at`: mover esa marca
+   * en el acto lo dejaría marcando dos jornadas, y `terminarSesion()` cerraría
+   * con una duración de días. Se desplaza todo junto al final.
+   */
+  const cambiarFecha = (ymd: string) => {
+    setFecha(ymd);
+    try {
+      if (ymd) localStorage.setItem(claveFecha, ymd);
+    } catch {
+      /* sin caché */
+    }
+  };
+
   const finalizar = () => {
     iniciarTerminar(async () => {
       await vaciarCola();
-      if (corrigiendo) await guardarCorreccion(sesionId);
-      else await terminarSesion(sesionId);
+      const iso = fechaElegida();
+      try {
+        localStorage.removeItem(claveFecha);
+      } catch {
+        /* sin caché */
+      }
+      if (corrigiendo) await guardarCorreccion(sesionId, iso);
+      else await terminarSesion(sesionId, iso);
     });
   };
 
@@ -300,6 +363,7 @@ export function SessionClient({
       try {
         localStorage.removeItem(claveCola);
         localStorage.removeItem(claveDescanso);
+        localStorage.removeItem(claveFecha);
       } catch {
         /* sin caché */
       }
@@ -360,6 +424,26 @@ export function SessionClient({
         </p>
       )}
 
+      {/* En una línea y no como campo con etiqueta encima: esta pantalla ya
+          lleva siete a nueve bloques y cada fila de más alarga el scroll.
+          Sale hoy por defecto, que es cuando se abrió la sesión. */}
+      <div className="session-fecha">
+        <label htmlFor="fecha-sesion">Fecha del entrenamiento</label>
+        <input
+          id="fecha-sesion"
+          className="input"
+          type="date"
+          value={fecha}
+          max={hoy || undefined}
+          onChange={(ev) => cambiarFecha(ev.target.value)}
+        />
+        {fecha !== "" && fecha !== fechaOriginal && (
+          <span className="session-fecha-nota">
+            {corrigiendo ? "Se aplica al guardar" : "Se aplica al terminar"}
+          </span>
+        )}
+      </div>
+
       {bloques.map((b) => {
         const hechasBloque = b.series.filter((s) => s.hecha).length;
         const completo = hechasBloque === b.series.length && b.series.length > 0;
@@ -367,9 +451,40 @@ export function SessionClient({
         return (
           <section className="exercise-block" key={b.bloque}>
             <div className="exercise-head">
+              {/* La miniatura es el recordatorio; la guía de verdad está a un
+                  toque, en el diálogo. Así la cabecera no crece —entre serie y
+                  serie lo que se quiere es llegar rápido a los campos— pero
+                  quien no conoce el movimiento lo puede ver grande.
+
+                  Si no hay nada que enseñar no se pinta el botón: sin foto ni
+                  músculos, abrir el diálogo daría una caja vacía. */}
+              {(b.fedbId || b.imagenUrl || b.musculosPrimarios?.length) && (
+                <button
+                  type="button"
+                  className="exercise-thumb"
+                  onClick={() => setVerFoto(b.bloque)}
+                  aria-label={`Ver ${nombreVisible(b)} en grande`}
+                >
+                  <ExercisePhoto
+                    fedbId={b.fedbId}
+                    imagenUrl={b.imagenUrl}
+                    nombre={nombreVisible(b)}
+                    placeholder="vacio"
+                  />
+                  <span className="exercise-thumb-lupa" aria-hidden="true">
+                    <Maximize2 size={13} strokeWidth={3} />
+                  </span>
+                </button>
+              )}
               <div className="exercise-name">
-                <h4>{b.nombre}</h4>
+                <h4>{nombreVisible(b)}</h4>
+                {/* Con alias, el nombre del catálogo se cuela en la línea del
+                    equipamiento en vez de abrir una tercera: con siete a nueve
+                    bloques, cada línea de más alarga el scroll justo donde se
+                    quiere llegar rápido a los campos. En grande se ve en el
+                    diálogo de la foto. */}
                 <span className="text-muted" style={{ fontSize: 12 }}>
+                  {b.alias && `${b.nombre} · `}
                   {b.equipo}
                   {b.tipo === "tiempo" && " · por tiempo"}
                 </span>
@@ -395,7 +510,7 @@ export function SessionClient({
                   <input
                     className="input"
                     inputMode="decimal"
-                    aria-label={`Kilos de la serie ${s.orden} de ${b.nombre}`}
+                    aria-label={`Kilos de la serie ${s.orden} de ${nombreVisible(b)}`}
                     value={s.kg}
                     onChange={(e) => editarSerie(b.bloque, s.id, { kg: e.target.value })}
                   />
@@ -405,7 +520,7 @@ export function SessionClient({
                     <input
                       className="input"
                       inputMode="numeric"
-                      aria-label={`Segundos de la serie ${s.orden} de ${b.nombre}`}
+                      aria-label={`Segundos de la serie ${s.orden} de ${nombreVisible(b)}`}
                       value={s.segundos}
                       onChange={(e) => editarSerie(b.bloque, s.id, { segundos: e.target.value })}
                     />
@@ -413,7 +528,7 @@ export function SessionClient({
                     <input
                       className="input"
                       inputMode="numeric"
-                      aria-label={`Repeticiones de la serie ${s.orden} de ${b.nombre}`}
+                      aria-label={`Repeticiones de la serie ${s.orden} de ${nombreVisible(b)}`}
                       value={s.reps}
                       onChange={(e) => editarSerie(b.bloque, s.id, { reps: e.target.value })}
                     />
@@ -452,6 +567,13 @@ export function SessionClient({
             <Trash2 size={14} /> Descartar este entrenamiento
           </button>
         </div>
+      )}
+
+      {/* Ver el ejercicio en grande. Se busca el bloque por su número en vez de
+          guardarlo entero en el estado: así no queda una copia vieja si las
+          series cambian mientras el diálogo está abierto. */}
+      {verFoto !== null && (
+        <VerEjercicio bloque={bloques.find((b) => b.bloque === verFoto)} onCerrar={() => setVerFoto(null)} />
       )}
 
       {confirmando && (
@@ -500,6 +622,67 @@ export function SessionClient({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * El ejercicio en grande, sin salir del entrenamiento.
+ *
+ * Vive en un diálogo y no en la propia cabecera a propósito: entre serie y
+ * serie lo que se quiere es llegar a los campos, y una foto grande fija en
+ * cada uno de los nueve bloques convertiría la pantalla en un scroll largo.
+ * Aquí se paga solo cuando se pide.
+ *
+ * No trae acciones ni escribe nada — es una lectura sobre una pantalla que
+ * tiene una cola de escritura detrás, y conviene que siga siendo así.
+ */
+function VerEjercicio({ bloque, onCerrar }: { bloque?: Bloque; onCerrar: () => void }) {
+  // Puede no estar si el bloque desapareció entre el clic y el render.
+  if (!bloque) return null;
+
+  return (
+    <div
+      className="dialog-backdrop"
+      onClick={onCerrar}
+      onKeyDown={(ev) => ev.key === "Escape" && onCerrar()}
+    >
+      <div
+        className="dialog dialog--ancho"
+        role="dialog"
+        aria-modal="true"
+        aria-label={nombreVisible(bloque)}
+        onClick={(ev) => ev.stopPropagation()}
+      >
+        {/* Aquí sí a dos líneas: en el diálogo sobra sitio y es el momento en
+            que alguien va a comprobar de qué movimiento se trata. */}
+        <div className="dialog-title">
+          <ExerciseName nombre={bloque.nombre} alias={bloque.alias} />
+        </div>
+
+        <div className="ver-ejercicio">
+          <div className="ver-foto">
+            <ExercisePhoto
+              fedbId={bloque.fedbId}
+              imagenUrl={bloque.imagenUrl}
+              nombre={nombreVisible(bloque)}
+            />
+          </div>
+
+          {bloque.musculosPrimarios?.length ? (
+            <MuscleDiagram
+              primarios={bloque.musculosPrimarios}
+              secundarios={bloque.musculosSecundarios}
+            />
+          ) : null}
+        </div>
+
+        <div className="dialog-actions">
+          <button className="btn btn-secondary" onClick={onCerrar}>
+            Cerrar
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

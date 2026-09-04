@@ -10,6 +10,7 @@ import { db } from "@/db";
 import {
   assignments,
   coachInvites,
+  exerciseAliases,
   exercises,
   muscleGroup,
   personalRecords,
@@ -22,6 +23,7 @@ import {
 } from "@/db/schema";
 import { getProximoDia, getSesionEnCurso, type DiaConEjercicios } from "@/db/queries";
 import { esAdmin, esEntrenador, getCurrentUser } from "@/lib/auth";
+import { buscarEnCatalogo, entradaDeCatalogo } from "@/lib/catalogo-externo";
 import { repsPlanificadas, segundosPlanificados } from "@/lib/format";
 import { getSupabaseServer } from "@/lib/supabase/server";
 
@@ -262,7 +264,40 @@ export async function anadirSerie(sesionId: string, bloque: number) {
 
 // ── Cerrar la sesión ──────────────────────────────────────────────────────
 
-export async function terminarSesion(sesionId: string) {
+/**
+ * El día al que se manda una sesión, o `null` si se queda donde está.
+ *
+ * Llega un instante ya resuelto —no un 'YYYY-MM-DD'— porque la zona horaria
+ * que importa es la de quien entrena y el servidor no la conoce: a las diez de
+ * la noche en UTC-3 el servidor ya está en el día siguiente. El día lo elige
+ * el cliente con `conFecha()`; aquí solo se comprueba que sea sensato.
+ */
+function inicioDesplazado(fechaIso: string | undefined, actual: Date): Date | null {
+  if (!fechaIso) return null;
+
+  const nuevo = new Date(fechaIso);
+  if (Number.isNaN(nuevo.getTime())) throw new Error("Esa fecha no es válida.");
+
+  // Un día de margen: el cliente manda su medianoche local y puede ir por
+  // delante de la del servidor. Más allá ya es un entrenamiento del futuro,
+  // que descuadraría el gráfico semanal y la adherencia.
+  if (nuevo.getTime() > Date.now() + 24 * 60 * 60 * 1000) {
+    throw new Error("No se puede fechar un entrenamiento en el futuro.");
+  }
+
+  return nuevo.getTime() === actual.getTime() ? null : nuevo;
+}
+
+/**
+ * Cierra la sesión en curso.
+ *
+ * `fechaIso` mueve el entrenamiento a otro día —se entrenó el sábado y se
+ * registra el lunes—. Se aplica aquí y no en el momento de elegirlo a
+ * propósito: mientras la sesión corre, el reloj es `now() - started_at` y
+ * mover esa marca lo dejaría marcando dos jornadas. La duración se mide
+ * siempre contra el inicio de verdad y se traslada entera.
+ */
+export async function terminarSesion(sesionId: string, fechaIso?: string) {
   const user = await getCurrentUser();
 
   const sesion = await db.query.workoutSessions.findFirst({
@@ -270,11 +305,23 @@ export async function terminarSesion(sesionId: string) {
   });
   if (!sesion) throw new Error("Sesión no encontrada");
 
+  const fin = new Date();
+  const inicio = inicioDesplazado(fechaIso, sesion.startedAt);
+  const duracionMs = fin.getTime() - sesion.startedAt.getTime();
+
   await db.transaction(async (tx) => {
     // Las series que quedaron sin confirmar no se guardan como hechas.
+    //
+    // El desplazamiento va antes que `registrar_prs()`: la marca se fecha con
+    // `coalesce(ended_at, now())` y tiene que salir con el día definitivo.
     await tx
       .update(workoutSessions)
-      .set({ status: "terminada", endedAt: new Date() })
+      .set({
+        status: "terminada",
+        ...(inicio
+          ? { startedAt: inicio, endedAt: new Date(inicio.getTime() + duracionMs) }
+          : { endedAt: fin }),
+      })
       .where(eq(workoutSessions.id, sesionId));
 
     await tx.execute(sql`SELECT registrar_prs(${sesionId})`);
@@ -355,7 +402,7 @@ export async function borrarSesion(sesionId: string) {
  * No se vuelve a aplicar la progresión lineal — ya se aplicó al cerrar la
  * sesión y volver a hacerlo subiría la carga dos veces.
  */
-export async function guardarCorreccion(sesionId: string) {
+export async function guardarCorreccion(sesionId: string, fechaIso?: string) {
   const user = await getCurrentUser();
 
   const sesion = await db.query.workoutSessions.findFirst({
@@ -363,7 +410,25 @@ export async function guardarCorreccion(sesionId: string) {
   });
   if (!sesion) throw new Error("Entrenamiento no encontrado");
 
+  const inicio = inicioDesplazado(fechaIso, sesion.startedAt);
+
   await db.transaction(async (tx) => {
+    // Primero el día, después las marcas: `registrar_prs()` fecha por
+    // `coalesce(ended_at, now())`, así que si se corrigiera después, el PR
+    // quedaría con el día viejo. La duración se traslada entera — se corrige
+    // cuándo fue el entrenamiento, no cuánto duró.
+    if (inicio) {
+      const duracionMs = (sesion.endedAt?.getTime() ?? sesion.startedAt.getTime())
+        - sesion.startedAt.getTime();
+      await tx
+        .update(workoutSessions)
+        .set({
+          startedAt: inicio,
+          endedAt: sesion.endedAt ? new Date(inicio.getTime() + duracionMs) : null,
+        })
+        .where(eq(workoutSessions.id, sesionId));
+    }
+
     await tx.delete(personalRecords).where(eq(personalRecords.sessionId, sesionId));
     await tx.execute(sql`SELECT registrar_prs(${sesionId})`);
   });
@@ -506,6 +571,9 @@ export async function guardarRutina(input: {
     nombre: string;
     titulo: string;
     subtitulo: string;
+    /** Se manda siempre: sin esto un día nuevo o clonado nacía en NULL y
+        perdía el «~45 min» de las pestañas y de la home. */
+    duracionMin: number | null;
     descansoDefectoS: number;
     progresion: "lineal" | "doble" | "manual";
     notas: string;
@@ -578,6 +646,7 @@ export async function guardarRutina(input: {
           nombre: d.nombre,
           titulo: d.titulo,
           subtitulo: d.subtitulo,
+          duracionMin: d.duracionMin,
           descansoDefectoS: d.descansoDefectoS,
           progresion: d.progresion,
           notas: d.notas,
@@ -587,6 +656,14 @@ export async function guardarRutina(input: {
           .update(routineDays)
           .set({
             orden: desplazado + i,
+            // Nombre, título y subtítulo también en el UPDATE: el editor los
+            // edita y sin esto solo se aplicaban a los días recién creados,
+            // sin dar ningún error. `codigo` no, que lo reparte el editor y
+            // es único por rutina.
+            nombre: d.nombre,
+            titulo: d.titulo,
+            subtitulo: d.subtitulo,
+            duracionMin: d.duracionMin,
             descansoDefectoS: d.descansoDefectoS,
             progresion: d.progresion,
             notas: d.notas,
@@ -636,6 +713,46 @@ export async function guardarRutina(input: {
   revalidatePath(`/rutinas/${input.routineId}`);
   revalidatePath("/rutinas");
   return { ok: true as const };
+}
+
+/**
+ * Añade un ejercicio a un día, desde la biblioteca.
+ *
+ * A diferencia de `guardarRutina`, esto escribe en el acto: no hay una
+ * sesión de edición más larga detrás que "Cancelar" pueda descartar, solo
+ * una decisión (a qué día) que ya se tomó al elegirlo en el diálogo. La
+ * prescripción sale con los valores por defecto de la tabla, como cualquier
+ * alta desde el picker del editor — se ajusta después, ahí mismo.
+ *
+ * El orden es el conteo de lo que ya hay en el día: mismo criterio que usa
+ * el editor en local (`dia.ejercicios.length`) antes de guardar.
+ */
+export async function agregarEjercicioARutina(routineDayId: string, exerciseId: string) {
+  const dia = await diaPropio(routineDayId);
+  const user = await getCurrentUser();
+
+  // Público o mío: lo mismo que decide qué se ve en /ejercicios. Sin esto,
+  // el id de un ejercicio privado ajeno se podría colar a mano.
+  const ejercicio = await db.query.exercises.findFirst({
+    where: and(
+      eq(exercises.id, exerciseId),
+      or(eq(exercises.esPublico, true), eq(exercises.createdBy, user.id)),
+    ),
+  });
+  if (!ejercicio) throw new Error("Ese ejercicio no existe o no podés verlo.");
+
+  const [{ n }] = await db
+    .select({ n: count() })
+    .from(routineExercises)
+    .where(eq(routineExercises.routineDayId, routineDayId));
+
+  await db.insert(routineExercises).values({ routineDayId, exerciseId, orden: n });
+
+  revalidatePath(`/rutinas/${dia.routineId}`);
+  revalidatePath(`/rutinas/${dia.routineId}/editar`);
+  revalidatePath("/ejercicios");
+
+  return { ok: true as const, dia: dia.titulo };
 }
 
 // ── Asignaciones ──────────────────────────────────────────────────────────
@@ -707,6 +824,9 @@ export type EjercicioNuevo = {
   grupo: string;
   equipo: string;
   imagenUrl: string | null;
+  fedbId: string | null;
+  nombreEn: string | null;
+  esPublico: boolean;
   esMio: boolean;
 };
 
@@ -722,6 +842,8 @@ export async function crearEjercicio(input: {
   nombre: string;
   grupo: string;
   equipo: string;
+  /** Enlace al catálogo externo, si se eligió uno en el alta. */
+  fedbId?: string | null;
 }): Promise<EjercicioNuevo> {
   const user = await getCurrentUser();
 
@@ -737,22 +859,19 @@ export async function crearEjercicio(input: {
 
   // Duplicado contra lo que este usuario ya ve: el catálogo común y lo suyo.
   // La base solo impide repetir entre públicos, así que esto lo cubre.
-  const repetido = await db
-    .select({ id: exercises.id })
-    .from(exercises)
-    .where(
-      and(
-        sql`lower(${exercises.nombre}) = lower(${nombre})`,
-        or(eq(exercises.esPublico, true), eq(exercises.createdBy, user.id)),
-      ),
-    )
-    .limit(1);
+  const repetido = await nombreRepetido({
+    nombre,
+    duenoId: user.id,
+    esPublicoDestino: false,
+  });
 
-  if (repetido.length > 0) throw new Error(`Ya existe un ejercicio llamado «${nombre}».`);
+  if (repetido) throw new Error(`Ya existe un ejercicio llamado «${nombre}».`);
+
+  const enlace = resolverEnlace(input.fedbId ?? undefined, { fedbId: null, nombreEn: null });
 
   const [fila] = await db
     .insert(exercises)
-    .values({ nombre, grupo, equipo, esPublico: false, createdBy: user.id })
+    .values({ nombre, grupo, equipo, esPublico: false, createdBy: user.id, ...enlace })
     .returning();
 
   revalidatePath("/ejercicios");
@@ -763,22 +882,81 @@ export async function crearEjercicio(input: {
     grupo: fila.grupo,
     equipo: fila.equipo,
     imagenUrl: fila.imagenUrl,
+    fedbId: fila.fedbId,
+    nombreEn: fila.nombreEn,
+    esPublico: fila.esPublico,
     esMio: true,
   };
 }
 
-/** El ejercicio, si es uno privado de este usuario. Si no, corta. */
-async function ejercicioPropio(exerciseId: string) {
+/**
+ * El ejercicio, si este usuario puede tocarlo. Si no, corta.
+ *
+ * Dos permisos distintos con la misma puerta:
+ *
+ *   · Cualquiera puede editar y borrar **lo suyo y privado**. Es su rincón del
+ *     catálogo y nadie más lo ve.
+ *   · Un **admin puede tocar cualquiera**, el catálogo común incluido. Es la
+ *     única forma de arreglar una errata o una foto mal enlazada de una fila
+ *     que no tiene dueño (`created_by` es NULL en todo lo que vino del seed),
+ *     y hasta ahora había que entrar por SQL.
+ *
+ * Devuelve también `esComun` para que quien llama sepa que está tocando algo
+ * que ve todo el mundo, y pueda avisar antes en vez de después.
+ */
+async function ejercicioEditable(exerciseId: string) {
   const user = await getCurrentUser();
 
-  const fila = await db.query.exercises.findFirst({
-    where: and(eq(exercises.id, exerciseId), eq(exercises.createdBy, user.id)),
-  });
+  const fila = await db.query.exercises.findFirst({ where: eq(exercises.id, exerciseId) });
+  if (!fila) throw new Error("Ese ejercicio no existe.");
 
-  if (!fila) throw new Error("Ese ejercicio no es tuyo o no existe.");
-  if (fila.esPublico) throw new Error("Los ejercicios del catálogo común no se tocan.");
+  const admin = esAdmin(user);
+  if (!admin) {
+    if (fila.createdBy !== user.id) throw new Error("Ese ejercicio no es tuyo o no existe.");
+    if (fila.esPublico) throw new Error("Los ejercicios del catálogo común no se tocan.");
+  }
 
-  return { fila, user };
+  return { fila, user, admin, esComun: fila.esPublico };
+}
+
+/**
+ * Nombre repetido entre lo que se vería junto.
+ *
+ * El índice único de la base solo cubre los públicos, así que la comprobación
+ * se hace aquí y **desde el punto de vista del dueño de la fila**, no de quien
+ * edita: cuando un admin corrige el ejercicio privado de otra persona, lo que
+ * no puede repetirse es contra el catálogo común y contra lo de *esa* persona.
+ *
+ * `esPublicoDestino` es lo que la fila va a ser al terminar, no lo que es
+ * ahora: al publicar hay que mirar contra todos los públicos aunque hoy sea
+ * privada, que es justo el choque que da el índice parcial.
+ */
+async function nombreRepetido(opts: {
+  nombre: string;
+  excluirId?: string;
+  duenoId: string | null;
+  esPublicoDestino: boolean;
+}) {
+  const visiblesJunto = opts.esPublicoDestino
+    ? eq(exercises.esPublico, true)
+    : or(
+        eq(exercises.esPublico, true),
+        opts.duenoId ? eq(exercises.createdBy, opts.duenoId) : undefined,
+      );
+
+  const [choque] = await db
+    .select({ id: exercises.id, esPublico: exercises.esPublico })
+    .from(exercises)
+    .where(
+      and(
+        sql`lower(${exercises.nombre}) = lower(${opts.nombre})`,
+        opts.excluirId ? sql`${exercises.id} <> ${opts.excluirId}` : undefined,
+        visiblesJunto,
+      ),
+    )
+    .limit(1);
+
+  return choque ?? null;
 }
 
 /**
@@ -790,9 +968,17 @@ async function ejercicioPropio(exerciseId: string) {
  */
 export async function editarEjercicio(
   exerciseId: string,
-  input: { nombre: string; grupo: string; equipo: string },
+  input: {
+    nombre: string;
+    grupo: string;
+    equipo: string;
+    /** `null` desenlaza y lo deja sin foto; `undefined` no toca el enlace. */
+    fedbId?: string | null;
+    /** Solo lo puede mandar un admin; `undefined` no toca la visibilidad. */
+    esPublico?: boolean;
+  },
 ): Promise<EjercicioNuevo> {
-  const { user } = await ejercicioPropio(exerciseId);
+  const { fila: antes, user, admin } = await ejercicioEditable(exerciseId);
 
   const nombre = input.nombre.trim().replace(/\s+/g, " ");
   const equipo = input.equipo.trim().replace(/\s+/g, " ");
@@ -804,23 +990,40 @@ export async function editarEjercicio(
   if (!grupos.includes(input.grupo)) throw new Error("Ese grupo muscular no existe.");
   const grupo = input.grupo as (typeof muscleGroup.enumValues)[number];
 
-  const repetido = await db
-    .select({ id: exercises.id })
-    .from(exercises)
-    .where(
-      and(
-        sql`lower(${exercises.nombre}) = lower(${nombre})`,
-        sql`${exercises.id} <> ${exerciseId}`,
-        or(eq(exercises.esPublico, true), eq(exercises.createdBy, user.id)),
-      ),
-    )
-    .limit(1);
+  // Publicar y despublicar es cosa de admin. Se ignora en silencio para el
+  // resto en vez de reventar: el formulario ni siquiera les enseña el control,
+  // así que si llega es porque alguien lo mandó a mano.
+  const esPublico = admin && input.esPublico !== undefined ? input.esPublico : antes.esPublico;
 
-  if (repetido.length > 0) throw new Error(`Ya existe un ejercicio llamado «${nombre}».`);
+  // Despublicar algo sin dueño lo dejaría invisible para todos, admin incluido:
+  // `getEjercicios()` filtra por público-o-mío, y `created_by` es NULL en todo
+  // lo que vino del seed. En vez de negarlo, lo adopta quien lo despublica —
+  // así sigue existiendo, en su biblioteca, y se puede volver a publicar.
+  const adoptaHuerfano = antes.esPublico && !esPublico && antes.createdBy === null;
+  const createdBy = adoptaHuerfano ? user.id : antes.createdBy;
+
+  const choque = await nombreRepetido({
+    nombre,
+    excluirId: exerciseId,
+    duenoId: createdBy,
+    esPublicoDestino: esPublico,
+  });
+
+  if (choque) {
+    throw new Error(
+      esPublico && !antes.esPublico
+        ? `No se puede publicar: ya hay un ejercicio público llamado «${nombre}».`
+        : `Ya existe un ejercicio llamado «${nombre}».`,
+    );
+  }
+
+  // El enlace al catálogo arrastra el nombre en inglés y los músculos: son
+  // suyos, no nuestros, así que se copian de él y nunca se escriben a mano.
+  const enlace = resolverEnlace(input.fedbId, antes);
 
   const [fila] = await db
     .update(exercises)
-    .set({ nombre, grupo, equipo })
+    .set({ nombre, grupo, equipo, esPublico, createdBy, ...enlace })
     .where(eq(exercises.id, exerciseId))
     .returning();
 
@@ -833,8 +1036,60 @@ export async function editarEjercicio(
     grupo: fila.grupo,
     equipo: fila.equipo,
     imagenUrl: fila.imagenUrl,
-    esMio: true,
+    fedbId: fila.fedbId,
+    nombreEn: fila.nombreEn,
+    esPublico: fila.esPublico,
+    esMio: fila.createdBy === user.id,
   };
+}
+
+/**
+ * Qué columnas del catálogo externo escribir según lo que llegue del
+ * formulario. Los tres casos son distintos y conviene tenerlos a la vista:
+ *
+ *   `undefined` → no se tocó el enlace; se deja como estaba.
+ *   `null`      → se desenlazó a mano; se limpia todo y vuelve al placeholder.
+ *   un id       → se copian nombre en inglés y músculos desde el catálogo.
+ */
+function resolverEnlace(
+  fedbId: string | null | undefined,
+  antes: { fedbId: string | null; nombreEn: string | null },
+) {
+  if (fedbId === undefined) return {};
+  if (fedbId === null) {
+    return { fedbId: null, nombreEn: null, musculosPrimarios: null, musculosSecundarios: null };
+  }
+
+  const entrada = entradaDeCatalogo(fedbId);
+  if (!entrada) throw new Error("Ese ejercicio del catálogo externo no existe.");
+
+  return {
+    fedbId: entrada.id,
+    nombreEn: entrada.name,
+    musculosPrimarios: entrada.primarios,
+    musculosSecundarios: entrada.secundarios,
+  };
+}
+
+/**
+ * Buscador del catálogo externo para el formulario.
+ *
+ * Es una server action y no un import del cliente por una razón concreta: el
+ * catálogo son 139 KB y tiene que quedarse en el servidor. Lo que viaja al
+ * navegador son los ocho resultados.
+ */
+export async function buscarCatalogo(termino: string) {
+  await getCurrentUser();
+
+  const t = termino.trim();
+  if (t.length < 3) return [];
+
+  return buscarEnCatalogo(t).map((e) => ({
+    id: e.id,
+    nombre: e.name,
+    primarios: e.primarios,
+    secundarios: e.secundarios,
+  }));
 }
 
 /**
@@ -845,7 +1100,7 @@ export async function editarEjercicio(
  * vez de soltar una violación de clave ajena.
  */
 export async function borrarEjercicio(exerciseId: string) {
-  await ejercicioPropio(exerciseId);
+  await ejercicioEditable(exerciseId);
 
   const [uso] = await db.execute<{ rutinas: string; series: string }>(sql`
     SELECT (SELECT count(DISTINCT d.routine_id)
@@ -873,6 +1128,68 @@ export async function borrarEjercicio(exerciseId: string) {
 
   revalidatePath("/ejercicios");
   return { ok: true as const };
+}
+
+/**
+ * Cómo llama este usuario a un ejercicio.
+ *
+ * No toca el catálogo: es una fila aparte que solo ve quien la puso, más sus
+ * alumnos dentro de las rutinas que él escribió. Devolver el alias vacío lo
+ * quita, y entonces se vuelve a ver el nombre del catálogo.
+ *
+ * No pasa por `ejercicioEditable()` a propósito. Esa puerta es para *modificar
+ * el catálogo* —lo propio y privado, o cualquier cosa si sos admin— y aquí no
+ * se modifica el catálogo: cualquiera puede ponerle su nombre a una fila común,
+ * que es justo el caso principal.
+ */
+export async function guardarAlias(exerciseId: string, entrada: string) {
+  const user = await getCurrentUser();
+
+  // Mismo criterio de visibilidad que `getEjercicios()`. Sin esto, poner alias
+  // a un id ajeno sería una forma de confirmar que existe el ejercicio privado
+  // de otra persona.
+  const [ejercicio] = await db
+    .select({ id: exercises.id, nombre: exercises.nombre })
+    .from(exercises)
+    .where(
+      and(
+        eq(exercises.id, exerciseId),
+        or(eq(exercises.esPublico, true), eq(exercises.createdBy, user.id)),
+      ),
+    )
+    .limit(1);
+
+  if (!ejercicio) throw new Error("Ese ejercicio no existe.");
+
+  const alias = entrada.trim().replace(/\s+/g, " ");
+  const propio = and(
+    eq(exerciseAliases.userId, user.id),
+    eq(exerciseAliases.exerciseId, exerciseId),
+  );
+
+  // Vaciar el campo quita el alias. Escribir el nombre del catálogo tal cual,
+  // también: guardarlo solo añadiría una línea gris repitiendo lo de arriba.
+  const quitar = alias === "" || alias.toLowerCase() === ejercicio.nombre.toLowerCase();
+
+  if (quitar) {
+    await db.delete(exerciseAliases).where(propio);
+  } else {
+    if (alias.length < 2) throw new Error("Poné un nombre de al menos dos letras.");
+    if (alias.length > 80) throw new Error("Ese nombre es demasiado largo.");
+
+    await db
+      .insert(exerciseAliases)
+      .values({ userId: user.id, exerciseId, alias })
+      .onConflictDoUpdate({
+        target: [exerciseAliases.userId, exerciseAliases.exerciseId],
+        set: { alias },
+      });
+  }
+
+  // El nombre viaja a la biblioteca, las rutinas, la sesión y el progreso.
+  revalidatePath("/", "layout");
+
+  return { alias: quitar ? null : alias };
 }
 
 // ── Sesión ────────────────────────────────────────────────────────────────

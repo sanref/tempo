@@ -159,8 +159,14 @@ cambiá `MOCK_USER_ID` a `22222222-2222-2222-2222-222222222222` (Laura Ferrán).
   no hay caché de shell: en el gimnasio, una recarga sin red deja pantalla en
   blanco. Es el siguiente paso natural del registro offline.
 - **Estados de carga.** Faltan los `loading.tsx` con esqueletos de lista.
-- **Fotos de ejercicios.** La biblioteca pinta el placeholder del diseño;
-  las imágenes reales van envueltas en `.grayscale`.
+- **Fotos propias de ejercicios.** Las del catálogo ya se ven —dos por
+  ejercicio, inicio y final del movimiento, de
+  [free-exercise-db](https://github.com/yuhonas/free-exercise-db) (dominio
+  público), con los diagramas musculares de [wger](https://wger.de)
+  ([CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/))—, pero el
+  alta todavía no deja subir la tuya ni enlazar al catálogo. Las fotos van
+  hotlinkeadas a un CDN y el service worker no las cachea, así que sin
+  cobertura caen al placeholder.
 - **Editor:** añadir y quitar ejercicios desde la biblioteca (hoy solo
   reordena y ajusta series), y crear o borrar días.
 - **Filtros de rutinas por tipo** (Fuerza / Hipertrofia) — hace falta una

@@ -78,6 +78,18 @@
   background: var(--color-bg);
   border-top: 2px solid var(--color-divider);
 }
+
+/* Capas de la app, de abajo arriba: cabecera 30 · barra de descanso 35 ·
+   pestañas 40 · diálogos 50. Todas viven aquí y no en design-system.css, que
+   se porta tal cual y no se retoca valor a valor.
+
+   El diálogo lo necesita de verdad, no por prolijidad: `.dialog-backdrop` es
+   `position: fixed` pero el sistema no le puso z-index, así que se apoyaba en
+   pintarse el último. Y no se pinta el último — `AccionesEjercicio` lo
+   renderiza *dentro* de su tarjeta, así que las tarjetas siguientes de la
+   rejilla, que ahora tienen la foto en `position: absolute`, le pasaban por
+   encima. Sin z-index el diálogo quedaba detrás de las imágenes del listado. */
+.dialog-backdrop { z-index: 50; }
 .tabbar a {
   display: block;
   text-align: center;
@@ -139,6 +151,16 @@
   flex-wrap: wrap;
 }
 .filter-row a { text-decoration: none; }
+/* Nombra el eje de cada fila de chips. El ancho fijo alinea el primer chip de
+   todas ellas, que es la regla de alineación a la izquierda del sistema. */
+.filter-label {
+  align-self: center;
+  min-width: 52px;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
+}
 
 .split {
   display: grid;
@@ -354,6 +376,30 @@
 .session-progress { height: 6px; background: var(--color-surface); }
 .session-progress > div { height: 100%; background: var(--color-accent); transition: width 160ms linear; }
 
+/* El día del entrenamiento. Una sola fila, con la regla de 2px que separa
+   secciones: es metadato de la sesión, no un bloque de ejercicio. */
+.session-fecha {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding: 12px var(--pad-x);
+  border-bottom: 2px solid var(--color-divider);
+}
+.session-fecha > label {
+  font-size: 12px;
+  color: color-mix(in srgb, var(--color-text) 70%, transparent);
+}
+/* El .input es ancho completo por defecto; aquí va al tamaño de la fecha. */
+.session-fecha .input {
+  width: auto;
+  min-height: 32px;
+}
+.session-fecha-nota {
+  font-size: 12px;
+  color: var(--color-accent);
+}
+
 .exercise-block {
   border-bottom: 2px solid var(--color-divider);
   padding: 18px var(--pad-x);
@@ -367,7 +413,41 @@
   margin-bottom: 12px;
 }
 .exercise-head h4 { margin: 0; }
-.exercise-name { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+/* La cabecera alinea por baseline, que es lo correcto para el texto; la
+   miniatura no tiene baseline y se centra aparte. */
+.exercise-thumb {
+  position: relative;
+  flex: 0 0 auto;
+  align-self: center;
+  width: 52px;
+  height: 52px;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: var(--color-surface);
+  cursor: pointer;
+}
+.exercise-thumb:empty { display: none; }
+/* Marca de "esto se toca". Va en la esquina y no encima de la foto: en 52px
+   cualquier cosa centrada tapa justo lo que hay que reconocer. */
+.exercise-thumb-lupa {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  padding: 2px;
+  color: var(--color-bg);
+  background: var(--color-accent);
+}
+.exercise-thumb:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.exercise-thumb img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.exercise-name { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; flex: 1; }
 .exercise-badge {
   font-size: 11px;
   padding: 3px 10px;
@@ -566,12 +646,26 @@
   align-items: flex-end;
   padding: 10px;
   border-bottom: 2px solid var(--color-divider);
+  /* Ancla de la foto: va absoluta para saltarse este padding, que existe para
+     colocar la etiqueta "Imagen pendiente" y no para enmarcar nada. */
+  position: relative;
+  overflow: hidden;
 }
 .library-thumb span {
   font-size: 10px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: color-mix(in srgb, var(--color-text) 45%, transparent);
+}
+/* La caja ya trae su 4/3; la foto lo rellena. Las de free-exercise-db vienen
+   en 3/2, así que sobra ancho y se recorta por los lados — el encuadre tiene
+   a la persona en el centro, que es lo que interesa. */
+.library-thumb img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 .library-body { padding: 12px 14px 0; }
 .library-body strong {
@@ -582,7 +676,7 @@
 }
 .library-body span { font-size: 12px; }
 
-/* Acciones de los ejercicios propios. Los .btn-ghost llevan padding lateral
+/* Acciones de una tarjeta de ejercicio. Los .btn-ghost llevan padding lateral
    propio; el margen negativo los devuelve a la línea del texto de la tarjeta,
    que todo va alineado a la izquierda. */
 .library-acciones {
@@ -592,11 +686,340 @@
 }
 .library-acciones .btn { font-size: 12px; }
 
+/* En la rejilla las cuatro acciones —añadir, mi nombre, editar, borrar— van en
+   una sola línea y solo con el icono: con texto no entran en 230 px, y apiladas
+   en tres renglones la tarjeta era casi toda botones.
+
+   Se reusa .btn-icon del sistema, achicado de 36 a 32: cuatro cuadrados de 36
+   más sus huecos se comen la tarjeta entera, y 32 sigue siendo un blanco
+   cómodo con el dedo. El margen negativo compensa el hueco que deja el icono
+   dentro de su cuadrado —(32 − 16) / 2— para que el primero caiga en la misma
+   vertical que el nombre, no su caja. */
+.library-grid .library-acciones {
+  gap: var(--space-1);
+  margin-left: calc(var(--space-2) * -1);
+}
+.library-grid .library-acciones .btn-icon {
+  width: 32px;
+  height: 32px;
+}
+
 .library-uso {
   display: block;
   margin-top: var(--space-1);
   font-size: 11px;
   color: color-mix(in srgb, var(--color-text) 50%, transparent);
+}
+
+/* El nombre del catálogo debajo del alias. Nunca se esconde: es el ancla común
+   entre dos personas que llaman distinto al mismo movimiento. Hereda el
+   contenedor —va dentro de <strong>, de <h4> o de una celda— así que fija peso
+   y familia en vez de dejarse arrastrar por la cabecera de turno. */
+.nombre-real {
+  display: block;
+  font-family: var(--font-body);
+  font-weight: 400;
+  font-size: 11px;
+  letter-spacing: 0;
+  text-transform: none;
+  color: color-mix(in srgb, var(--color-text) 50%, transparent);
+}
+
+/* ── Edición de ejercicio ──────────────────────────────────────────────────
+   Lo que solo ve un admin, más el buscador de foto. */
+
+/* Advertencia de que esto lo ve todo el mundo. Regla de 2px a la izquierda,
+   igual que el sistema marca lo activo — aquí marca lo que tiene consecuencias
+   fuera de tu biblioteca. */
+.aviso-comun {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  box-shadow: inset 2px 0 0 var(--color-accent);
+  background: var(--color-surface);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* Mismo peso visual que .radio, con la marca cuadrada que pide el sistema. */
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+  font-size: 14px;
+}
+.check input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.check span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.check span::before {
+  content: "";
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border: 1.5px solid var(--color-divider);
+}
+.check:hover span::before { border-color: var(--color-accent); }
+.check input:checked + span::before {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  box-shadow: inset 0 0 0 3px var(--color-bg);
+}
+.check input:focus-visible + span::before { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+
+.enlace-actual {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--color-divider);
+}
+.enlace-thumb {
+  position: relative;
+  flex: 0 0 auto;
+  width: 56px;
+  height: 42px;
+  overflow: hidden;
+  background: var(--color-surface);
+}
+.enlace-thumb img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.enlace-texto { flex: 1; min-width: 0; }
+.enlace-texto strong {
+  display: block;
+  font-family: var(--font-heading);
+  font-weight: 800;
+  font-size: 13px;
+}
+.enlace-texto small { font-size: 11px; }
+.enlace-buscar { align-self: flex-start; margin-left: calc(var(--space-1) * -1); }
+
+/* Se limita el alto y se hace scroll: ocho candidatos con foto no caben en un
+   diálogo sin empujar los botones fuera de la pantalla. */
+.candidatos {
+  display: flex;
+  flex-direction: column;
+  max-height: 260px;
+  overflow-y: auto;
+  margin-top: var(--space-2);
+}
+.candidato {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) 0;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--color-divider);
+  cursor: pointer;
+}
+.candidato:hover { background: color-mix(in srgb, var(--color-text) 6%, transparent); }
+
+/* Atribución de las fuentes externas. Separada por la regla de 2px que el
+   sistema usa entre secciones. */
+.creditos {
+  margin-top: var(--space-6);
+  padding-top: var(--space-3);
+  border-top: 2px solid var(--color-divider);
+  font-size: 11px;
+  color: color-mix(in srgb, var(--color-text) 50%, transparent);
+}
+.creditos a { color: inherit; }
+
+/* ── Ver el ejercicio en grande (desde la sesión) ──────────────────────────
+   El diálogo del sistema mide 440px, que va bien para un formulario y se
+   queda corto para una foto y dos siluetas. */
+
+.dialog--ancho { width: min(640px, 100%); }
+
+.ver-ejercicio {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--space-4);
+  align-items: start;
+}
+/* En móvil la foto manda y el diagrama baja debajo: partir 640px entre foto y
+   siluetas deja las dos cosas ilegibles. */
+@media (max-width: 640px) {
+  .ver-ejercicio { grid-template-columns: 1fr; }
+}
+
+.ver-foto {
+  position: relative;
+  aspect-ratio: 3 / 2;
+  background: var(--color-surface);
+  display: flex;
+  align-items: flex-end;
+  padding: 10px;
+  overflow: hidden;
+}
+.ver-foto img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.ver-foto span {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
+}
+/* Dentro del diálogo las siluetas van más chicas: comparten sitio con la foto. */
+.ver-ejercicio .musculos-cara { width: 84px; }
+.ver-ejercicio .musculos { margin-top: 0; }
+
+/* ── Detalle de ejercicio ──────────────────────────────────────────────────
+   Dos columnas que se apilan en móvil. Las reglas de 2px entre secciones y
+   1px entre filas, como en el resto. */
+
+.ejercicio-detalle {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  border-bottom: 2px solid var(--color-divider);
+}
+.ejercicio-detalle > section {
+  padding: var(--space-6) var(--pad-x);
+}
+/* Divisoria solo entre columnas, no colgando de la última. */
+.ejercicio-detalle > section + section {
+  border-left: 1px solid var(--color-divider);
+}
+/* Apiladas, esa divisoria tiene que girar: dejada a la izquierda queda una
+   línea vertical suelta al costado de la sección, que no separa nada. */
+@media (max-width: 640px) {
+  .ejercicio-detalle > section + section {
+    border-left: 0;
+    border-top: 1px solid var(--color-divider);
+  }
+}
+
+.seccion-titulo {
+  margin: 0 0 var(--space-3);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-text) 50%, transparent);
+}
+
+.detalle-foto {
+  position: relative;
+  aspect-ratio: 3 / 2;
+  max-width: 420px;
+  background: var(--color-surface);
+  display: flex;
+  align-items: flex-end;
+  padding: 10px;
+  overflow: hidden;
+}
+.detalle-foto img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.detalle-foto span {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
+}
+.detalle-pie { font-size: 11px; margin: var(--space-2) 0 0; }
+
+.lista-rutinas { list-style: none; margin: 0; padding: 0; }
+.lista-rutinas li { border-bottom: 1px solid var(--color-divider); }
+.lista-rutinas a {
+  display: block;
+  padding: var(--space-2) 0;
+  font-family: var(--font-heading);
+  font-weight: 800;
+  font-size: 14px;
+  color: inherit;
+  text-decoration: none;
+}
+.lista-rutinas a:hover { color: var(--color-accent); }
+
+.detalle-cifra {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-weight: 800;
+  font-size: 28px;
+}
+.detalle-cifra span { font-size: 13px; font-weight: 400; }
+
+/* El nombre de la tarjeta lleva al detalle; hereda el color y solo se acentúa
+   al pasar por encima, que el sistema no subraya los enlaces de tarjeta. */
+.library-nombre { color: inherit; text-decoration: none; }
+.library-nombre:hover strong { color: var(--color-accent); }
+
+/* ── Músculos trabajados ───────────────────────────────────────────────────
+   Los SVG vienen de wger. La silueta ya es gris de origen; los músculos se
+   pintan con `mask-image`, así el color sale de --color-accent en vez del rojo
+   propio del archivo y la paleta se mantiene. */
+
+.musculos { margin-top: var(--space-2); }
+
+.musculos-siluetas {
+  display: flex;
+  gap: var(--space-4);
+  margin-bottom: var(--space-2);
+}
+/* Proporción nativa de los SVG (200×369). Fijarla evita que la capa y la
+   silueta se descuadren, que comparten espacio de coordenadas. */
+/* `min()` y no un ancho fijo: las dos siluetas más el hueco tienen que caber
+   en la columna más estrecha de `.ejercicio-detalle` (280px) sin desbordar, y
+   en cuanto hay sitio suben a 140px, que es donde el resaltado se lee. */
+.musculos-cara {
+  position: relative;
+  width: min(140px, 44%);
+  aspect-ratio: 200 / 369;
+}
+.musculos-cara img {
+  width: 100%;
+  height: 100%;
+}
+.musculos-capa {
+  position: absolute;
+  inset: 0;
+  background: var(--color-accent);
+  mask-repeat: no-repeat;
+  mask-size: 100% 100%;
+}
+/* El secundario baja, no cambia de color: dos rojos distintos leerían como dos
+   categorías y son el mismo dato con menos peso. */
+.musculos-capa--secundaria { opacity: 0.45; }
+
+.musculos-lista {
+  font-size: 11px;
+  line-height: 1.5;
+  color: color-mix(in srgb, var(--color-text) 65%, transparent);
+}
+.musculos-etiqueta {
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 10px;
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
 }
 
 /* ── Editor ────────────────────────────────────────────────────────────── */
@@ -616,6 +1039,15 @@
   font-size: 22px;
   min-height: 44px;
   max-width: 420px;
+}
+
+/* Cómo va a quedar lo que se está escribiendo. Nombre y título del día se
+   leen en sitios que no están a la vista mientras se edita —la pestaña, el
+   encabezado de la sesión—, así que la vista previa va bajo el campo. */
+.campo-pista {
+  margin: 5px 0 0;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
 }
 
 .editor-grid {
@@ -731,6 +1163,26 @@
   box-shadow: inset 2px 0 0 var(--color-accent);
   padding-left: var(--space-2);
 }
+/* Miniatura del picker. Cuadrada y chica: aquí basta con reconocer el
+   movimiento, no con estudiarlo. Se queda vacía cuando el ejercicio no tiene
+   foto, dejando la fila alineada con las demás. */
+.picker-thumb {
+  position: relative;
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  overflow: hidden;
+  background: var(--color-surface);
+}
+.picker-thumb img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+/* Empuja el estado a la derecha ahora que la fila tiene tres partes. */
+.picker-texto { flex: 1; min-width: 0; }
 .picker-row strong {
   display: block;
   font-family: var(--font-heading);

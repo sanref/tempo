@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { empezarSesion } from "@/app/actions";
+import { ExerciseName } from "@/components/exercise-name";
 import { StatStrip } from "@/components/stat-strip";
 import { WeeklyVolumeChart } from "@/components/weekly-volume-chart";
 import {
@@ -76,7 +77,7 @@ export default async function InicioPage() {
               <div className="rows">
                 {dia.ejercicios.map((e) => (
                   <div className="row" key={e.id}>
-                    <span>{e.nombre}</span>
+                    <ExerciseName nombre={e.nombre} alias={e.alias} />
                     <span className="text-muted">
                       {e.series} × {e.reps} · {carga(e.cargaKg, e.cargaTexto)}
                     </span>
@@ -108,7 +109,7 @@ export default async function InicioPage() {
             <div className="rows">
               {records.map((r, i) => (
                 <div className="row row--tall" key={`${r.nombre}-${i}`}>
-                  <span>{r.nombre}</span>
+                  <ExerciseName nombre={r.nombre} alias={r.alias} />
                   <span className="num">
                     {kg(r.kg)} kg × {r.reps}
                   </span>

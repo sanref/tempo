@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { ExerciseName } from "@/components/exercise-name";
 import { carga } from "@/lib/format";
 import type { DiaConEjercicios } from "@/db/queries";
 
@@ -60,7 +61,9 @@ export function DayTabs({ dias }: { dias: DiaConEjercicios[] }) {
                 {dia.ejercicios.map((e, n) => (
                   <tr key={e.id}>
                     <td className="text-muted">{n + 1}</td>
-                    <td style={{ fontWeight: 600 }}>{e.nombre}</td>
+                    <td style={{ fontWeight: 600 }}>
+                      <ExerciseName nombre={e.nombre} alias={e.alias} />
+                    </td>
                     <td>{e.series}</td>
                     <td>{e.reps}</td>
                     <td>{carga(e.cargaKg, e.cargaTexto)}</td>

@@ -25,6 +25,26 @@ export function carga(cargaKg: string | null, cargaTexto: string | null): string
 }
 
 /**
+ * En qué está metido un ejercicio: "en 3 rutinas y con 240 series registradas".
+ * `null` cuando no está en uso, que es cuando se puede borrar.
+ *
+ * Vive aquí y no junto a `AccionesEjercicio` porque lo necesitan los dos lados:
+ * el botón de borrar (cliente) lo pone en su `title`, y la tarjeta de la
+ * rejilla (servidor) lo pinta debajo de la fila de acciones. Un módulo con
+ * `"use client"` no sirve —desde el servidor sus exports solo se pueden
+ * renderizar o pasar como props, no llamar—, y este archivo no lleva directiva.
+ */
+export function motivoUso(uso: { rutinas: number; series: number }): string | null {
+  const partes = [
+    uso.rutinas > 0 && `en ${uso.rutinas} ${uso.rutinas === 1 ? "rutina" : "rutinas"}`,
+    uso.series > 0 &&
+      `con ${uso.series} ${uso.series === 1 ? "serie registrada" : "series registradas"}`,
+  ].filter(Boolean);
+
+  return partes.length > 0 ? partes.join(" y ") : null;
+}
+
+/**
  * `reps` del plan es texto libre ('8', '8-12', '45 s'). Estas dos funciones lo
  * traducen a números al arrancar la sesión, con el mismo criterio que
  * `reps_planificadas()` y `segundos_planificados()` de db/01_schema.sql —
@@ -115,6 +135,31 @@ export function diaMes(d: Date): { dia: string; mes: string } {
 /** "2 ago" */
 export function fechaCorta(d: Date): string {
   return `${d.getDate()} ${MESES[d.getMonth()].toLowerCase()}`;
+}
+
+/**
+ * `YYYY-MM-DD` en hora local, que es lo que espera un `<input type="date">`.
+ *
+ * A mano y no con `toISOString()`, que formatea en UTC: un entrenamiento de
+ * las diez de la noche en UTC-3 ya es del día siguiente allí, y el campo
+ * habría salido con la fecha de mañana.
+ */
+export function fechaInput(d: Date): string {
+  const dos = (x: number) => String(x).padStart(2, "0");
+  return `${d.getFullYear()}-${dos(d.getMonth() + 1)}-${dos(d.getDate())}`;
+}
+
+/**
+ * El mismo instante trasladado a otro día, conservando la hora.
+ *
+ * Tampoco vale `new Date('2026-08-30')`: esa forma se parsea como medianoche
+ * UTC y con cualquier desfase cae en el día de al lado.
+ */
+export function conFecha(original: Date, ymd: string): Date {
+  const [anio, mes, dia] = ymd.split("-").map(Number);
+  const salida = new Date(original);
+  salida.setFullYear(anio, mes - 1, dia);
+  return salida;
 }
 
 /** "Martes 11 de agosto" */

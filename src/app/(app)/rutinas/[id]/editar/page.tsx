@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import { and, eq, isNull } from "drizzle-orm";
 
 import { db } from "@/db";
-import { getEjercicios, getEquipos, getGrupos, getRutina } from "@/db/queries";
+import { getCatalogoLigero, getEquipos, getGrupos, getRutina } from "@/db/queries";
 import { assignments, users } from "@/db/schema";
 import { getCurrentUser } from "@/lib/auth";
 
@@ -23,11 +23,16 @@ export default async function EditorPage({ params }: { params: Promise<{ id: str
       .from(assignments)
       .innerJoin(users, eq(users.id, assignments.clientId))
       .where(and(eq(assignments.routineId, id), isNull(assignments.endedOn))),
-    // El catálogo entero viaja con la página: son unas decenas de filas y así
-    // el selector busca en local, sin ida y vuelta por cada tecla.
-    getEjercicios(user.id),
+    // El catálogo entero viaja con la página —656+ filas, pero solo los seis
+    // campos que pinta el picker— y así el selector busca en local, sin ida y
+    // vuelta por cada tecla.
+    //
+    // Con el autor de la rutina: el picker se abre al lado de la lista del día,
+    // que hereda su alias. Sin esto, la misma fila saldría con un nombre a la
+    // izquierda y otro a la derecha.
+    getCatalogoLigero(user.id, rutina.autorId),
     getGrupos(),
-    getEquipos(),
+    getEquipos(user.id),
   ]);
 
   return (

@@ -1,4 +1,5 @@
 import { E1rmChart } from "@/components/e1rm-chart";
+import { ExerciseName, nombreVisible } from "@/components/exercise-name";
 import {
   getE1rmSemanal,
   getEjercicioDestacado,
@@ -37,7 +38,11 @@ export default async function ProgresoPage() {
 
       <div className="split progress-split">
         <section>
-          <h6>{destacado ? `${destacado.nombre} — 1RM estimado` : "1RM estimado"}</h6>
+          {/* El <h6> del sistema va en versalitas y a 10px: el par en dos
+              líneas no cabe ahí, así que el nombre real se queda fuera. Está a
+              un clic en la biblioteca, y esta cabecera dice de qué es el
+              gráfico, no identifica una fila del catálogo. */}
+          <h6>{destacado ? `${nombreVisible(destacado)} — 1RM estimado` : "1RM estimado"}</h6>
           <div className="big-figure">
             {kg(actual)} kg{" "}
             {delta !== 0 && (
@@ -84,7 +89,9 @@ export default async function ProgresoPage() {
               <tbody>
                 {marcas.map((m) => (
                   <tr key={m.nombre}>
-                    <td style={{ fontWeight: 600 }}>{m.nombre}</td>
+                    <td style={{ fontWeight: 600 }}>
+                      <ExerciseName nombre={m.nombre} alias={m.alias} />
+                    </td>
                     <td>
                       {kg(m.kg)} kg × {m.reps}
                     </td>

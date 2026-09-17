@@ -303,7 +303,12 @@ CREATE TABLE workout_sessions (
   started_at      timestamptz NOT NULL DEFAULT now(),
   ended_at        timestamptz,
   notas           text NOT NULL DEFAULT '',
-  CONSTRAINT sessions_rango CHECK (ended_at IS NULL OR ended_at >= started_at)
+  -- Resumen de frecuencia cardíaca de la sesión, si hubo un dispositivo BLE
+  -- conectado. Nunca una serie temporal: solo promedio y máxima.
+  fc_promedio     smallint,
+  fc_maxima       smallint,
+  CONSTRAINT sessions_rango CHECK (ended_at IS NULL OR ended_at >= started_at),
+  CONSTRAINT sessions_fc_rango CHECK (fc_maxima IS NULL OR fc_promedio IS NULL OR fc_maxima >= fc_promedio)
 );
 
 CREATE INDEX sessions_user_fecha_idx ON workout_sessions (user_id, started_at DESC);

@@ -246,6 +246,8 @@ export const workoutSessions = pgTable(
     startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
     endedAt: timestamp("ended_at", { withTimezone: true }),
     notas: text("notas").notNull().default(""),
+    fcPromedio: smallint("fc_promedio"),
+    fcMaxima: smallint("fc_maxima"),
   },
   (t) => [index("sessions_user_fecha_idx").on(t.userId, t.startedAt)],
 );

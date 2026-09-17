@@ -394,6 +394,8 @@ src/db/queries.ts             una función de lectura por bloque de pantalla
 src/lib/auth.ts               punto único de acoplamiento con la autenticación
 src/lib/supabase/server.ts    cliente de Supabase atado a las cookies (solo auth)
 src/lib/format.ts             formato es-ES
+src/lib/version.ts            la versión de package.json, para la pantalla (¡solo servidor!)
+CHANGELOG.md                  qué trae cada versión; lo pendiente, en [Sin publicar]
 src/lib/ejercicios-externos.ts  único sitio que sabe dónde viven fotos y diagramas
 src/lib/catalogo-externo.ts   el catálogo de free-exercise-db en memoria (¡solo servidor!)
 src/lib/catalogo-glosario.ts  glosario es→en y puntuación; lo comparte el script
@@ -479,6 +481,31 @@ Por orden de valor:
 6. **Traspasar alumnos entre entrenadores.** Hoy soltar y volver a vincular son
    dos pasos con un código de por medio; no hay forma de pasarle un alumno a un
    colega de una vez.
+
+## Versionado
+
+SemVer, **independiente del de `tempo_mobile`**: cada repo publica a su ritmo y
+cada uno tiene su `CHANGELOG.md`. Empezó en 0.1.0 el 2026-09-17.
+
+**La versión se escribe solo en `package.json`.** La pantalla la lee de
+`src/lib/version.ts` —al pie de todas las pantallas con sesión— y ese módulo es
+solo de servidor: importarlo desde un componente de cliente mete el
+`package.json` entero en el bundle. El `VERSION = "tempo-v1"` de `public/sw.js`
+es otra cosa: nombra las cachés, no la app, y solo se sube cuando cambia lo que
+cachea el service worker.
+
+Mientras sea 0.x, **menor** (0.2.0) para funcionalidad nueva y para todo lo que
+traiga migración; **parche** (0.1.1) para arreglos que no tocan el esquema. El
+móvil anota en su CHANGELOG qué migraciones de `db/` necesita cada versión suya.
+
+Lo terminado se va apuntando en `CHANGELOG.md` bajo `[Sin publicar]`. Publicar
+es:
+
+1. `npm version 0.2.0 --no-git-tag-version` — sube `package.json` y el lock.
+2. En el CHANGELOG, `[Sin publicar]` pasa a `[0.2.0] — AAAA-MM-DD`, se abre uno
+   vacío encima y se actualizan los enlaces del pie.
+3. Commit, `git tag -a v0.2.0 -m "Tempo 0.2.0"` y
+   `git push origin develop v0.2.0`. El tag marca el commit exacto publicado.
 
 ## Al terminar un cambio
 

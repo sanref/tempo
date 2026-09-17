@@ -67,6 +67,16 @@
   margin: 0 auto;
 }
 
+/* La versión, al pie de todas las pantallas con sesión. Menuda y apagada como
+   `.creditos`, pero sin su regla: no abre una sección, cierra la página. */
+.version-app {
+  max-width: var(--shell-max);
+  margin: 0 auto;
+  padding: var(--space-6) var(--pad-x) var(--space-4);
+  font-size: 11px;
+  color: color-mix(in srgb, var(--color-text) 50%, transparent);
+}
+
 .tabbar {
   display: none;
   position: fixed;

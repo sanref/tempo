@@ -1,6 +1,7 @@
 import { SiteHeader } from "@/components/site-header";
 import { TabBar } from "@/components/tab-bar";
 import { getCurrentUser } from "@/lib/auth";
+import { VERSION } from "@/lib/version";
 
 /**
  * Todo lo que exige sesión cuelga de aquí.
@@ -21,6 +22,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     <>
       <SiteHeader user={user} />
       <div className="app-shell">{children}</div>
+      {/* Para saber qué hay subido cuando algo falla, no para leerla. */}
+      <footer className="version-app">Tempo {VERSION}</footer>
       <TabBar />
     </>
   );

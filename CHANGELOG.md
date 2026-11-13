@@ -7,6 +7,16 @@ Lo que trae cada versión publicada del web. El formato sigue
 
 ## [Sin publicar]
 
+### Ejercicios
+
+- Descripción de texto libre en cada ejercicio: se escribe en el formulario de
+  alta y edición y se lee en el detalle (`/ejercicios/[id]`). La edita quien
+  puede editar el ejercicio — lo propio y privado, o un admin en el catálogo
+  común. Migración `13_descripcion_ejercicios.sql`. Solo web: el móvil no la
+  lee ni la escribe.
+- El diálogo de alta y edición de ejercicio ya no se cierra al hacer clic fuera
+  ni con Escape: se perdía lo que hubiera escrito. Solo por sus botones.
+
 ## [0.1.0] — 2026-09-17
 
 Primera versión numerada: recoge todo lo construido hasta hoy.

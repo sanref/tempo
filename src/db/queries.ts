@@ -804,6 +804,9 @@ export async function getEjercicios(
         alias: mio.t.alias,
         grupo: exercises.grupo,
         equipo: exercises.equipo,
+        // No se pinta en la tarjeta: viaja para que "Editar" abra el formulario
+        // con el texto puesto, en vez de vacío y pisándolo al guardar.
+        descripcion: exercises.descripcion,
         imagenUrl: exercises.imagenUrl,
         fedbId: exercises.fedbId,
         nombreEn: exercises.nombreEn,

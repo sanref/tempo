@@ -955,6 +955,9 @@
   color: color-mix(in srgb, var(--color-text) 45%, transparent);
 }
 .detalle-pie { font-size: 11px; margin: var(--space-2) 0 0; }
+/* La descripción se escribe con saltos de línea —un paso por renglón— y hay
+   que respetarlos. El resto lo hereda de `.detail-head p`. */
+.detalle-descripcion { white-space: pre-line; }
 
 .lista-rutinas { list-style: none; margin: 0; padding: 0; }
 .lista-rutinas li { border-bottom: 1px solid var(--color-divider); }

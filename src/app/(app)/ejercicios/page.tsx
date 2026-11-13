@@ -203,6 +203,7 @@ export default async function EjerciciosPage({
                           nombre: e.nombre,
                           grupo: e.grupo,
                           equipo: e.equipo,
+                          descripcion: e.descripcion,
                           fedbId: e.fedbId,
                           nombreEn: e.nombreEn,
                           esPublico: e.esPublico,

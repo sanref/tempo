@@ -71,6 +71,10 @@ CREATE TABLE exercises (
   nombre       text NOT NULL,
   grupo        muscle_group NOT NULL,
   equipo       text NOT NULL,
+  -- Cómo se hace, en texto libre y con saltos de línea. Es de la fila, no de
+  -- quien la mira —como `nombre`, y al revés que el alias—: la escribe quien
+  -- puede editar el ejercicio y la lee todo el que lo ve. '' ⇒ sin descripción.
+  descripcion  text NOT NULL DEFAULT '',
   -- Foto propia. Pisa a la del catálogo externo; hoy nadie la escribe todavía.
   imagen_url   text,
   -- Enlace al catálogo de free-exercise-db (dominio público). El id de allí es

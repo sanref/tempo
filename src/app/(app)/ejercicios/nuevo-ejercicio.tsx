@@ -24,18 +24,11 @@ export function NuevoEjercicio({ grupos, equipos }: { grupos: string[]; equipos:
       </button>
 
       {abierto && (
-        <div
-          className="dialog-backdrop"
-          onClick={() => setAbierto(false)}
-          onKeyDown={(ev) => ev.key === "Escape" && setAbierto(false)}
-        >
-          <div
-            className="dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Nuevo ejercicio"
-            onClick={(ev) => ev.stopPropagation()}
-          >
+        /* El fondo no cierra, ni Escape: aquí hay un formulario a medio
+           rellenar y un clic fuera —o soltar fuera una selección de texto— lo
+           tiraba entero. Solo se sale por "Cancelar" o guardando. */
+        <div className="dialog-backdrop">
+          <div className="dialog" role="dialog" aria-modal="true" aria-label="Nuevo ejercicio">
             <div className="dialog-title">Nuevo ejercicio</div>
             <ExerciseForm
               grupos={grupos}

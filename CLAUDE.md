@@ -96,6 +96,14 @@ nombre a una fila del catálogo común— y el FK contra `exercises` es CASCADE,
 RESTRICT como los de `routine_exercises` y `set_logs`: un alias no puede
 impedir borrar un ejercicio que no usa nadie.
 
+**La descripción es de la fila, no de quien la mira.** `exercises.descripcion`
+es texto libre con saltos de línea, y va al revés que el alias: la escribe
+quien pasa por `ejercicioEditable()` y la lee todo el que ve el ejercicio. En
+`editarEjercicio()`, `undefined` la deja como estaba y `''` la borra — por eso
+`getEjercicios()` la trae aunque la rejilla no la pinte: sin ella, "Editar"
+desde la biblioteca abriría el campo vacío y la pisaría al guardar. Solo se
+enseña en `/ejercicios/[id]`; el móvil no la lee ni la escribe.
+
 **El nombre real nunca se esconde.** Con alias se pinta el alias y debajo, en
 `.nombre-real`, el del catálogo — es el único ancla común entre dos personas
 que llaman distinto al mismo movimiento, y el que sale en el buscador del
@@ -361,7 +369,7 @@ pestañas inferior y desaparece la navegación de la cabecera.
 
 ```
 db/01_schema.sql              tablas, tipos, índices, vistas, funciones, trigger y políticas
-db/02_….sql                   migraciones, numeradas de 02 a 98 (la 09 abre el catálogo al admin, la 11 trae los alias)
+db/02_….sql                   migraciones, numeradas de 02 a 98 (la 09 abre el catálogo al admin, la 11 trae los alias, la 13 la descripción de ejercicios)
 db/99_seed.sql                datos del prototipo (lleva los enlaces al catálogo externo)
 db/enlaces-fedb.tsv           el matcheo español→inglés, curado a mano
 db/fedb-catalogo.json         copia recortada de free-exercise-db (no baja al navegador)

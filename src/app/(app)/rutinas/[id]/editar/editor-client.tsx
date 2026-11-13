@@ -734,8 +734,11 @@ export function EditorClient({
       {modal === "biblioteca" && dia && (
         <div
           className="dialog-backdrop"
-          onClick={cerrarModal}
-          onKeyDown={(ev) => ev.key === "Escape" && cerrarModal()}
+          // Con el alta abierta hay un formulario a medio rellenar: ahí ni el
+          // fondo ni Escape cierran, solo sus botones. En la lista no hay nada
+          // que perder y se sigue cerrando como siempre.
+          onClick={() => modoPicker !== "nuevo" && cerrarModal()}
+          onKeyDown={(ev) => ev.key === "Escape" && modoPicker !== "nuevo" && cerrarModal()}
         >
           <div
             className="dialog"

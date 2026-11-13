@@ -108,17 +108,14 @@ export function AccionesEjercicio({
       )}
 
       {modal === "editar" && (
-        <div
-          className="dialog-backdrop"
-          onClick={() => setModal(null)}
-          onKeyDown={(ev) => ev.key === "Escape" && setModal(null)}
-        >
+        /* Como en el alta: con un formulario dentro, ni el fondo ni Escape
+           cierran. Solo "Cancelar" o guardar. */
+        <div className="dialog-backdrop">
           <div
             className="dialog"
             role="dialog"
             aria-modal="true"
             aria-label={`Editar ${ejercicio.nombre}`}
-            onClick={(ev) => ev.stopPropagation()}
           >
             <div className="dialog-title">Editar ejercicio</div>
             <ExerciseForm

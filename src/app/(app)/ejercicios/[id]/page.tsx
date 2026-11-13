@@ -62,6 +62,8 @@ export default async function DetalleEjercicioPage({
           {ejercicio.nombreEn && ` · ${ejercicio.nombreEn}`}
         </p>
 
+        {ejercicio.descripcion && <p className="detalle-descripcion">{ejercicio.descripcion}</p>}
+
         {(ejercicio.esMio || admin) && (
           <div className="actions">
             <AccionesEjercicio
@@ -70,6 +72,7 @@ export default async function DetalleEjercicioPage({
                 nombre: ejercicio.nombre,
                 grupo: ejercicio.grupo,
                 equipo: ejercicio.equipo,
+                descripcion: ejercicio.descripcion,
                 fedbId: ejercicio.fedbId,
                 nombreEn: ejercicio.nombreEn,
                 esPublico: ejercicio.esPublico,

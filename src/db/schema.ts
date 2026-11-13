@@ -77,6 +77,8 @@ export const exercises = pgTable(
     nombre: text("nombre").notNull(),
     grupo: muscleGroup("grupo").notNull(),
     equipo: text("equipo").notNull(),
+    // Cómo se hace. De la fila, no de quien la mira; '' es "sin descripción".
+    descripcion: text("descripcion").notNull().default(""),
     // Foto propia; pisa a la del catálogo externo.
     imagenUrl: text("imagen_url"),
     // Enlace a free-exercise-db: de aquí salen las dos fotos del movimiento.

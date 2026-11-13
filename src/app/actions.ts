@@ -823,12 +823,34 @@ export type EjercicioNuevo = {
   nombre: string;
   grupo: string;
   equipo: string;
+  descripcion: string;
   imagenUrl: string | null;
   fedbId: string | null;
   nombreEn: string | null;
   esPublico: boolean;
   esMio: boolean;
 };
+
+const DESCRIPCION_MAX = 2000;
+
+/**
+ * La descripción tal como se guarda. Al revés que el nombre, aquí los saltos
+ * de línea son contenido —separan los pasos— y no se aplastan: solo se
+ * normalizan los de Windows, se recortan los bordes y se limita a un párrafo
+ * en blanco seguido.
+ */
+function limpiarDescripcion(texto: string) {
+  const descripcion = texto
+    .replace(/\r\n?/g, "\n")
+    .replace(/[^\S\n]+$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  if (descripcion.length > DESCRIPCION_MAX) {
+    throw new Error(`La descripción no puede pasar de ${DESCRIPCION_MAX} caracteres.`);
+  }
+  return descripcion;
+}
 
 /**
  * Alta de un ejercicio del usuario.
@@ -842,6 +864,7 @@ export async function crearEjercicio(input: {
   nombre: string;
   grupo: string;
   equipo: string;
+  descripcion?: string;
   /** Enlace al catálogo externo, si se eligió uno en el alta. */
   fedbId?: string | null;
 }): Promise<EjercicioNuevo> {
@@ -868,10 +891,19 @@ export async function crearEjercicio(input: {
   if (repetido) throw new Error(`Ya existe un ejercicio llamado «${nombre}».`);
 
   const enlace = resolverEnlace(input.fedbId ?? undefined, { fedbId: null, nombreEn: null });
+  const descripcion = limpiarDescripcion(input.descripcion ?? "");
 
   const [fila] = await db
     .insert(exercises)
-    .values({ nombre, grupo, equipo, esPublico: false, createdBy: user.id, ...enlace })
+    .values({
+      nombre,
+      grupo,
+      equipo,
+      descripcion,
+      esPublico: false,
+      createdBy: user.id,
+      ...enlace,
+    })
     .returning();
 
   revalidatePath("/ejercicios");
@@ -881,6 +913,7 @@ export async function crearEjercicio(input: {
     nombre: fila.nombre,
     grupo: fila.grupo,
     equipo: fila.equipo,
+    descripcion: fila.descripcion,
     imagenUrl: fila.imagenUrl,
     fedbId: fila.fedbId,
     nombreEn: fila.nombreEn,
@@ -972,6 +1005,8 @@ export async function editarEjercicio(
     nombre: string;
     grupo: string;
     equipo: string;
+    /** `''` la borra; `undefined` la deja como estaba. */
+    descripcion?: string;
     /** `null` desenlaza y lo deja sin foto; `undefined` no toca el enlace. */
     fedbId?: string | null;
     /** Solo lo puede mandar un admin; `undefined` no toca la visibilidad. */
@@ -1021,9 +1056,12 @@ export async function editarEjercicio(
   // suyos, no nuestros, así que se copian de él y nunca se escriben a mano.
   const enlace = resolverEnlace(input.fedbId, antes);
 
+  const descripcion =
+    input.descripcion === undefined ? antes.descripcion : limpiarDescripcion(input.descripcion);
+
   const [fila] = await db
     .update(exercises)
-    .set({ nombre, grupo, equipo, esPublico, createdBy, ...enlace })
+    .set({ nombre, grupo, equipo, descripcion, esPublico, createdBy, ...enlace })
     .where(eq(exercises.id, exerciseId))
     .returning();
 
@@ -1035,6 +1073,7 @@ export async function editarEjercicio(
     nombre: fila.nombre,
     grupo: fila.grupo,
     equipo: fila.equipo,
+    descripcion: fila.descripcion,
     imagenUrl: fila.imagenUrl,
     fedbId: fila.fedbId,
     nombreEn: fila.nombreEn,

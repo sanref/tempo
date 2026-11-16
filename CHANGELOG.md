@@ -19,6 +19,13 @@ Lo que trae cada versión publicada del web. El formato sigue
 
 ### Plataforma
 
+- Recuperación de contraseña desde `/login` (*«¿Olvidaste tu contraseña?»*) y
+  pantalla `/recuperar` para establecer una clave nueva a partir del enlace
+  enviado por correo (compatible también cuando el enlace se abre fuera de la
+  PWA instalada en iOS).
+- Ventana modal **Mi perfil** desde la cabecera (ficha del usuario en escritorio
+  e icono de perfil en móvil) para consultar email, rol y entrenador, editar el
+  nombre y cambiar la contraseña verificando la clave actual.
 - Instalación completa como PWA: iconos PNG (`192×192`, `512×512`, variantes
   `maskable` e icono táctil para iOS), accesos rápidos en el manifiesto, ajuste
   de áreas seguras en modo standalone, cabeceras de caché de `/sw.js`, precaché

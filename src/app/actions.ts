@@ -2,8 +2,10 @@
 
 import { randomInt } from "node:crypto";
 
+import { createClient } from "@supabase/supabase-js";
 import { and, asc, count, desc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { db } from "@/db";
@@ -25,7 +27,7 @@ import { getProximoDia, getSesionEnCurso, type DiaConEjercicios } from "@/db/que
 import { esAdmin, esEntrenador, getCurrentUser } from "@/lib/auth";
 import { buscarEnCatalogo, entradaDeCatalogo } from "@/lib/catalogo-externo";
 import { repsPlanificadas, segundosPlanificados } from "@/lib/format";
-import { getSupabaseServer } from "@/lib/supabase/server";
+import { getSupabaseServer, credenciales } from "@/lib/supabase/server";
 
 /**
  * Mutaciones. Todas verifican que la fila pertenece al usuario actual.
@@ -1250,7 +1252,7 @@ export async function guardarAlias(exerciseId: string, entrada: string) {
 // lo único que escribe la cookie de sesión: durante el render de un Server
 // Component ya no se pueden tocar cabeceras.
 
-export type EstadoAuth = { error: string } | null;
+export type EstadoAuth = { error?: string; ok?: string } | null;
 
 /**
  * Los mensajes de Supabase vienen en inglés y la app entera está en es-ES.
@@ -1263,10 +1265,33 @@ function traducirError(mensaje: string): string {
     "User already registered": "Ya existe una cuenta con ese email.",
     "Password should be at least 6 characters.":
       "La contraseña necesita al menos 6 caracteres.",
+    "New password should be different from the old password.":
+      "La nueva contraseña tiene que ser distinta de la actual.",
     "Unable to validate email address: invalid format": "Ese email no es válido.",
     "Signup requires a valid password": "Escribí una contraseña.",
+    "Auth session missing!": "El enlace caducó o ya fue usado. Pedí uno nuevo.",
+    "Token has expired or is invalid": "El enlace caducó o ya fue usado. Pedí uno nuevo.",
   };
-  return tabla[mensaje] ?? mensaje;
+  if (tabla[mensaje]) return tabla[mensaje];
+  if (/rate limit|once every/i.test(mensaje)) {
+    return "Esperá un minuto antes de pedir otro correo.";
+  }
+  return mensaje;
+}
+
+/** Origen público de la petición actual para armar enlaces que viajan por email. */
+async function origenActual(): Promise<string> {
+  if (process.env.NEXT_PUBLIC_SITE_URL) {
+    return process.env.NEXT_PUBLIC_SITE_URL.replace(/\/+$/, "");
+  }
+  const h = await headers();
+  const origin = h.get("origin");
+  if (origin) return origin.replace(/\/+$/, "");
+
+  const host = h.get("x-forwarded-host") ?? h.get("host") ?? "localhost:3000";
+  const proto =
+    h.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
+  return `${proto}://${host}`;
 }
 
 /**
@@ -1347,6 +1372,164 @@ export async function cerrarSesion() {
 
   revalidatePath("/", "layout");
   redirect("/login");
+}
+
+/**
+ * Envía el correo de recuperación de contraseña.
+ *
+ * Se dispara con `flowType: "implicit"` en un cliente sin estado a propósito:
+ * con PKCE el enlace del correo solo se puede abrir en el mismo navegador que
+ * guardó la cookie `code_verifier`, lo que falla siempre si quien lo pide está
+ * dentro de la PWA instalada en iOS y el correo se abre en Safari o en otro
+ * dispositivo.
+ */
+export async function solicitarRecuperacion(
+  _prev: EstadoAuth,
+  formData: FormData,
+): Promise<EstadoAuth> {
+  const email = String(formData.get("email") ?? "").trim();
+  if (!email) return { error: "Escribí tu email." };
+
+  const { url, key } = credenciales();
+  const supabase = createClient(url, key, {
+    auth: { flowType: "implicit", persistSession: false, autoRefreshToken: false },
+  });
+
+  const origen = await origenActual();
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: `${origen}/recuperar`,
+  });
+
+  if (error) return { error: traducirError(error.message) };
+
+  return {
+    ok: "Si existe una cuenta con ese email, te enviamos un enlace para restablecer la contraseña. Revisá también la carpeta de correo no deseado.",
+  };
+}
+
+/**
+ * Asienta en cookies la sesión temporal que trae el enlace del correo de
+ * recuperación (tanto si viene en el hash `#access_token=…` como en query
+ * `?token_hash=…` o `?code=…`).
+ */
+export async function activarSesionRecuperacion(entrada: {
+  accessToken?: string;
+  refreshToken?: string;
+  tokenHash?: string;
+  code?: string;
+}): Promise<{ ok: true } | { error: string }> {
+  const supabase = await getSupabaseServer();
+
+  if (entrada.accessToken && entrada.refreshToken) {
+    const { error } = await supabase.auth.setSession({
+      access_token: entrada.accessToken,
+      refresh_token: entrada.refreshToken,
+    });
+    if (error) return { error: traducirError(error.message) };
+    return { ok: true };
+  }
+
+  if (entrada.tokenHash) {
+    const { error } = await supabase.auth.verifyOtp({
+      type: "recovery",
+      token_hash: entrada.tokenHash,
+    });
+    if (error) return { error: traducirError(error.message) };
+    return { ok: true };
+  }
+
+  if (entrada.code) {
+    const { error } = await supabase.auth.exchangeCodeForSession(entrada.code);
+    if (error) return { error: traducirError(error.message) };
+    return { ok: true };
+  }
+
+  return { error: "El enlace no es válido o está incompleto." };
+}
+
+/** Guarda la contraseña nueva elegida desde `/recuperar` y entra a la app. */
+export async function completarRecuperacion(
+  _prev: EstadoAuth,
+  formData: FormData,
+): Promise<EstadoAuth> {
+  const password = String(formData.get("password") ?? "");
+  const repetir = String(formData.get("repetir") ?? "");
+
+  if (password.length < 6) {
+    return { error: "La contraseña necesita al menos 6 caracteres." };
+  }
+  if (password !== repetir) {
+    return { error: "Las dos contraseñas no coinciden." };
+  }
+
+  const supabase = await getSupabaseServer();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { error: "El enlace caducó o ya fue usado. Pedí uno nuevo desde el login." };
+  }
+
+  const { error } = await supabase.auth.updateUser({ password });
+  if (error) return { error: traducirError(error.message) };
+
+  revalidatePath("/", "layout");
+  redirect("/");
+}
+
+// ── Perfil propio ─────────────────────────────────────────────────────────
+
+export async function guardarPerfil(nombre: string): Promise<{ ok: true } | { error: string }> {
+  const user = await getCurrentUser();
+  const limpio = nombre.trim();
+
+  if (!limpio) return { error: "El nombre no puede quedar vacío." };
+  if (limpio.length > 80) return { error: "El nombre es demasiado largo (máximo 80 caracteres)." };
+
+  await db.update(users).set({ nombre: limpio }).where(eq(users.id, user.id));
+
+  // Se sincroniza también en el metadato de Supabase Auth para que el móvil y
+  // futuras reconstrucciones de perfil sigan viendo el mismo nombre.
+  const supabase = await getSupabaseServer();
+  await supabase.auth.updateUser({ data: { nombre: limpio } }).catch(() => {});
+
+  revalidatePath("/", "layout");
+  return { ok: true };
+}
+
+export async function cambiarPasswordPerfil(
+  passwordActual: string,
+  passwordNueva: string,
+  repetir: string,
+): Promise<{ ok: true } | { error: string }> {
+  const user = await getCurrentUser();
+
+  if (!passwordActual) return { error: "Escribí tu contraseña actual." };
+  if (passwordNueva.length < 6) {
+    return { error: "La nueva contraseña necesita al menos 6 caracteres." };
+  }
+  if (passwordNueva !== repetir) {
+    return { error: "La nueva contraseña y su confirmación no coinciden." };
+  }
+  if (passwordActual === passwordNueva) {
+    return { error: "La nueva contraseña tiene que ser distinta de la actual." };
+  }
+
+  const supabase = await getSupabaseServer();
+
+  // Comprueba que quien tiene abierta la sesión conoce de verdad la clave actual.
+  const { error: errActual } = await supabase.auth.signInWithPassword({
+    email: user.email,
+    password: passwordActual,
+  });
+  if (errActual) return { error: "La contraseña actual no es correcta." };
+
+  const { error: errNueva } = await supabase.auth.updateUser({ password: passwordNueva });
+  if (errNueva) return { error: traducirError(errNueva.message) };
+
+  revalidatePath("/", "layout");
+  return { ok: true };
 }
 
 // ── Invitaciones de entrenador ────────────────────────────────────────────

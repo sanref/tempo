@@ -19,7 +19,7 @@ import { NextResponse, type NextRequest } from "next/server";
  */
 
 /** Rutas que se ven sin sesión. El resto exige login. */
-const PUBLICAS = ["/login", "/offline"];
+const PUBLICAS = ["/login", "/offline", "/recuperar"];
 
 export async function proxy(request: NextRequest) {
   let response = NextResponse.next({ request });

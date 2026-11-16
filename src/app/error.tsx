@@ -11,7 +11,7 @@ export default function Error({ error, reset }: { error: Error; reset: () => voi
   return (
     <div style={{ padding: "48px 20px", maxWidth: "72ch" }}>
       <div className="eyebrow">Error</div>
-      <h1 style={{ fontSize: 34, margin: "6px 0 10px" }}>
+      <h1 style={{ fontSize: "calc(34px * var(--escala-texto))", margin: "6px 0 10px" }}>
         {esDb
           ? "No hay conexión con la base"
           : esAuth
@@ -30,7 +30,7 @@ export default function Error({ error, reset }: { error: Error; reset: () => voi
               background: "var(--color-surface)",
               border: "1px solid var(--color-divider)",
               padding: 16,
-              fontSize: 13,
+              fontSize: "calc(13px * var(--escala-texto))",
               overflowX: "auto",
             }}
           >
@@ -49,7 +49,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=…`}
               background: "var(--color-surface)",
               border: "1px solid var(--color-divider)",
               padding: 16,
-              fontSize: 13,
+              fontSize: "calc(13px * var(--escala-texto))",
               overflowX: "auto",
             }}
           >

@@ -483,7 +483,7 @@ export function SessionClient({
                     bloques, cada línea de más alarga el scroll justo donde se
                     quiere llegar rápido a los campos. En grande se ve en el
                     diálogo de la foto. */}
-                <span className="text-muted" style={{ fontSize: 12 }}>
+                <span className="text-muted" style={{ fontSize: "calc(12px * var(--escala-texto))" }}>
                   {b.alias && `${b.nombre} · `}
                   {b.equipo}
                   {b.tipo === "tiempo" && " · por tiempo"}

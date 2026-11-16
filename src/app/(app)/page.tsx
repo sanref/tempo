@@ -117,7 +117,7 @@ export default async function InicioPage() {
               ))}
             </div>
           ) : (
-            <p className="text-muted" style={{ fontSize: 13 }}>
+            <p className="text-muted" style={{ fontSize: "calc(13px * var(--escala-texto))" }}>
               Todavía no hay marcas registradas.
             </p>
           )}

@@ -239,7 +239,7 @@ export function ExerciseForm({
         </p>
       )}
 
-      <p className="text-muted" style={{ fontSize: 12, margin: 0 }}>
+      <p className="text-muted" style={{ fontSize: "calc(12px * var(--escala-texto))", margin: 0 }}>
         {ejercicio
           ? "El nombre nuevo sale en todas las rutinas y en el historial: se guarda por id."
           : "Será tuyo y no aparecerá en el catálogo de los demás."}
@@ -335,7 +335,7 @@ function BuscadorCatalogo({
           </button>
         </div>
       ) : (
-        <p className="text-muted" style={{ fontSize: 12, margin: 0 }}>
+        <p className="text-muted" style={{ fontSize: "calc(12px * var(--escala-texto))", margin: 0 }}>
           Sin foto. Se pinta «Imagen pendiente».
         </p>
       )}
@@ -355,15 +355,15 @@ function BuscadorCatalogo({
           />
 
           {termino.trim().length < 3 ? (
-            <p className="text-muted" style={{ fontSize: 12, margin: 0 }}>
+            <p className="text-muted" style={{ fontSize: "calc(12px * var(--escala-texto))", margin: 0 }}>
               Escribí al menos tres letras.
             </p>
           ) : buscando ? (
-            <p className="text-muted" style={{ fontSize: 12, margin: 0 }}>
+            <p className="text-muted" style={{ fontSize: "calc(12px * var(--escala-texto))", margin: 0 }}>
               Buscando…
             </p>
           ) : candidatos.length === 0 ? (
-            <p className="text-muted" style={{ fontSize: 12, margin: 0 }}>
+            <p className="text-muted" style={{ fontSize: "calc(12px * var(--escala-texto))", margin: 0 }}>
               Nada parecido. Puede que este ejercicio no exista en el catálogo — se queda sin
               foto, que es mejor que enseñar otro movimiento.
             </p>

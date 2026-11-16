@@ -19,12 +19,22 @@
  * Al subir la versión se tiran los cachés viejos enteros.
  */
 
-const VERSION = "tempo-v1";
+const VERSION = "tempo-v2";
 const SHELL = `${VERSION}-shell`; // documentos HTML
-const ESTATICOS = `${VERSION}-estaticos`; // /_next/static, iconos, manifest
+const ESTATICOS = `${VERSION}-estaticos`; // /_next/static, iconos, diagramas, manifest
 
 /** Cuántos documentos se guardan. Cada sesión de entrenamiento es una URL. */
 const MAX_DOCUMENTOS = 30;
+
+const PRECACHE_ESTATICOS = [
+  "/icon.svg",
+  "/apple-touch-icon.png",
+  "/icons/icon-192.png",
+  "/icons/icon-512.png",
+  "/icons/icon-maskable-192.png",
+  "/icons/icon-maskable-512.png",
+  "/manifest.webmanifest",
+];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -36,8 +46,9 @@ self.addEventListener("install", (event) => {
       // entera y la app se queda sin service worker.
       await Promise.allSettled([
         shell.add(new Request("/offline", { cache: "reload" })),
-        estaticos.add(new Request("/icon.svg", { cache: "reload" })),
-        estaticos.add(new Request("/manifest.webmanifest", { cache: "reload" })),
+        ...PRECACHE_ESTATICOS.map((ruta) =>
+          estaticos.add(new Request(ruta, { cache: "reload" })),
+        ),
       ]);
 
       await self.skipWaiting();
@@ -65,6 +76,9 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
 
+  // El propio SW nunca sale del caché: tiene que ver cambios nuevos siempre.
+  if (url.pathname === "/sw.js") return;
+
   // Payloads RSC (prefetch al pasar el ratón, navegación cliente): solo red.
   if (req.headers.get("RSC") === "1" || url.searchParams.has("_rsc")) return;
 
@@ -79,7 +93,15 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  if (req.destination === "image" || url.pathname === "/manifest.webmanifest") {
+  // Imágenes locales, iconos de la PWA y máscaras SVG de músculos (`mask-image`
+  // no siempre viaja con `destination === "image"` en todos los navegadores).
+  if (
+    req.destination === "image" ||
+    url.pathname === "/manifest.webmanifest" ||
+    url.pathname === "/apple-touch-icon.png" ||
+    url.pathname.startsWith("/icons/") ||
+    url.pathname.startsWith("/musculos/")
+  ) {
     event.respondWith(primeroCache(req, ESTATICOS));
   }
 });

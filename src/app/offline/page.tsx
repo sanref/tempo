@@ -17,7 +17,7 @@ export default function Offline() {
   return (
     <div style={{ padding: "48px 20px", maxWidth: "56ch" }}>
       <div className="eyebrow">Sin conexión</div>
-      <h1 style={{ fontSize: 34, margin: "6px 0 10px" }}>Esta pantalla no está guardada</h1>
+      <h1 style={{ fontSize: "calc(34px * var(--escala-texto))", margin: "6px 0 10px" }}>Esta pantalla no está guardada</h1>
       <p className="text-muted">
         No hay red y de esta página no queda copia en el teléfono. Las que abriste antes sí
         siguen disponibles.

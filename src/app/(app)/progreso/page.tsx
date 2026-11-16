@@ -72,7 +72,7 @@ export default async function ProgresoPage() {
       <section style={{ padding: "24px 20px" }}>
         <h6>Marcas personales</h6>
         {marcas.length === 0 ? (
-          <p className="text-muted" style={{ fontSize: 13 }}>
+          <p className="text-muted" style={{ fontSize: "calc(13px * var(--escala-texto))" }}>
             Todavía no hay marcas registradas.
           </p>
         ) : (

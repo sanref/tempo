@@ -79,7 +79,7 @@ export function AliasEjercicio({
         />
       </div>
 
-      <p className="text-muted" style={{ fontSize: 12, margin: 0 }}>
+      <p className="text-muted" style={{ fontSize: "calc(12px * var(--escala-texto))", margin: 0 }}>
         Solo lo ves vos. El nombre del catálogo se sigue leyendo debajo, y dejarlo
         vacío vuelve a él.
       </p>
@@ -108,7 +108,7 @@ export function AliasEjercicio({
             <p className="detalle-cifra">
               {ejercicio.alias ?? <span className="text-muted">{ejercicio.nombre}</span>}
             </p>
-            <p className="text-muted" style={{ fontSize: 13, maxWidth: "48ch" }}>
+            <p className="text-muted" style={{ fontSize: "calc(13px * var(--escala-texto))", maxWidth: "48ch" }}>
               {ejercicio.alias
                 ? "Es tu nombre para este ejercicio: lo ves en la biblioteca, en tus rutinas y mientras entrenás. Nadie más lo ve."
                 : "Podés ponerle el nombre con el que lo conocés. Solo lo verías vos, y el del catálogo seguiría debajo."}

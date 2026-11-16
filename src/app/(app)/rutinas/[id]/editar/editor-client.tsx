@@ -487,7 +487,7 @@ export function EditorClient({
             <h6>{dia.titulo}</h6>
 
             {lista.length === 0 && (
-              <p className="text-muted" style={{ fontSize: 13 }}>
+              <p className="text-muted" style={{ fontSize: "calc(13px * var(--escala-texto))" }}>
                 Este día todavía no tiene ejercicios.
               </p>
             )}
@@ -818,7 +818,7 @@ export function EditorClient({
                 </div>
 
                 {!busqueda.trim() && catalogo.length > SIN_BUSQUEDA && (
-                  <p className="text-muted" style={{ fontSize: 13 }}>
+                  <p className="text-muted" style={{ fontSize: "calc(13px * var(--escala-texto))" }}>
                     Mostrando {SIN_BUSQUEDA} de {catalogo.length}. Escribí para buscar en el resto.
                   </p>
                 )}

@@ -1,3 +1,4 @@
+import { PieApp } from "@/components/pie-app";
 import { SiteHeader } from "@/components/site-header";
 import { TabBar } from "@/components/tab-bar";
 import { getCurrentUser } from "@/lib/auth";
@@ -22,8 +23,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     <>
       <SiteHeader user={user} />
       <div className="app-shell">{children}</div>
-      {/* Para saber qué hay subido cuando algo falla, no para leerla. */}
-      <footer className="version-app">Tempo {VERSION}</footer>
+      {/* Versión de la app más controles plegables de texto e instalación PWA. */}
+      <PieApp version={VERSION} />
       <TabBar />
     </>
   );

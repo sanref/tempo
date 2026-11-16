@@ -7,7 +7,7 @@ export function E1rmChart({ puntos }: { puntos: number[] }) {
   const validos = puntos.filter((p) => p > 0);
   if (validos.length < 2) {
     return (
-      <p className="text-muted" style={{ fontSize: 13, marginTop: 14 }}>
+      <p className="text-muted" style={{ fontSize: "calc(13px * var(--escala-texto))", marginTop: 14 }}>
         Hacen falta al menos dos semanas de registros para dibujar la curva.
       </p>
     );

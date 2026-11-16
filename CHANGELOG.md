@@ -7,6 +7,17 @@ Lo que trae cada versión publicada del web. El formato sigue
 
 ## [Sin publicar]
 
+### Plataforma
+
+- Instalación completa como PWA: iconos PNG (`192×192`, `512×512`, variantes
+  `maskable` e icono táctil para iOS), accesos rápidos en el manifiesto, ajuste
+  de áreas seguras en modo standalone, cabeceras de caché de `/sw.js`, precaché
+  de iconos y botón de instalar en el pie (diálogo nativo en Android/escritorio
+  e indicaciones en Safari iOS).
+- Opción de tamaño de texto en tres niveles (*Normal*, *Grande* +15% y *Muy
+  grande* +30%) en el pie de página, persistida por dispositivo sin parpadeo al
+  recargar y con opción de minimizar el panel para que no estorbe.
+
 ### Ejercicios
 
 - Descripción de texto libre en cada ejercicio: se escribe en el formulario de

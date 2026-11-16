@@ -41,7 +41,7 @@ export function DayTabs({ dias }: { dias: DiaConEjercicios[] }) {
         </p>
 
         {dia.ejercicios.length === 0 ? (
-          <p className="text-muted" style={{ fontSize: 13 }}>
+          <p className="text-muted" style={{ fontSize: "calc(13px * var(--escala-texto))" }}>
             Día sin ejercicios todavía.
           </p>
         ) : (

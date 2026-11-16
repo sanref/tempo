@@ -353,12 +353,25 @@ export async function terminarSesion(sesionId: string, fechaIso?: string) {
   redirect("/historial");
 }
 
+/**
+ * Descarta una sesión en curso sin dejar rastro.
+ *
+ * Se borra la fila (y sus `set_logs` por CASCADE) en vez de pasarla a
+ * `abandonada`: mientras se entrena la cola ya fue volcando series hechas a la
+ * base, y si quedaran ahí entrarían en `volumen_semanal()` y `ultimas_series()`.
+ * Solo actúa sobre `en_curso` para que nunca pueda tocar el historial cerrado.
+ */
 export async function descartarSesion(sesionId: string) {
   const user = await getCurrentUser();
   await db
-    .update(workoutSessions)
-    .set({ status: "abandonada", endedAt: new Date() })
-    .where(and(eq(workoutSessions.id, sesionId), eq(workoutSessions.userId, user.id)));
+    .delete(workoutSessions)
+    .where(
+      and(
+        eq(workoutSessions.id, sesionId),
+        eq(workoutSessions.userId, user.id),
+        eq(workoutSessions.status, "en_curso"),
+      ),
+    );
 
   revalidatePath("/", "layout");
   redirect("/");

@@ -7,6 +7,16 @@ Lo que trae cada versión publicada del web. El formato sigue
 
 ## [Sin publicar]
 
+### Alumno
+
+- En la sesión en curso, el botón **Terminar** abre un diálogo con tres opciones:
+  terminar el entrenamiento, descartar la sesión (borrando también las series
+  que ya se hubieran volcado en segundo plano para que no quede nada registrado)
+  o seguir entrenando.
+- La barra superior del entrenamiento (tiempo, series, volumen y progreso) queda
+  fija al hacer scroll: se ve completa arriba del todo y pasa a un formato
+  compacto al desplazarse por los bloques.
+
 ### Plataforma
 
 - Instalación completa como PWA: iconos PNG (`192×192`, `512×512`, variantes

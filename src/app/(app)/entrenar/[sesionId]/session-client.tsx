@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Maximize2, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, Check, Maximize2, Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 
 import {
@@ -86,10 +86,16 @@ export function SessionClient({
   const [ahoraMs, setAhoraMs] = useState(ahora);
   const [descansoHasta, setDescansoHasta] = useState<number | null>(null);
   const [sinConexion, setSinConexion] = useState(false);
-  const [confirmando, setConfirmando] = useState(false);
+  /** `"terminar"` abre el menú de cierre con las tres opciones; `"descartar"` la confirmación directa del pie. */
+  const [dialogoCierre, setDialogoCierre] = useState<"terminar" | "descartar" | null>(null);
+  const [accionCierre, setAccionCierre] = useState<"terminar" | "descartar" | null>(null);
   /** Bloque cuya foto se está viendo en grande, o null. */
   const [verFoto, setVerFoto] = useState<number | null>(null);
   const [terminando, iniciarTerminar] = useTransition();
+
+  // Cabecera pegajosa: grande arriba del todo y compacta al hacer scroll.
+  const [compacta, setCompacta] = useState(false);
+  const [topSticky, setTopSticky] = useState<number | null>(null);
 
   // El día del entrenamiento y el que trae la sesión, para saber si se movió.
   // Los dos vacíos hasta montar: el día depende de la zona horaria de quien
@@ -152,6 +158,51 @@ export function SessionClient({
     // Solo al montar.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ── Posición y tamaño de la barra superior al hacer scroll ───────────────
+  useEffect(() => {
+    const cabecera = document.querySelector<HTMLElement>(".site-header");
+    if (!cabecera) return;
+
+    const medir = () => setTopSticky(cabecera.offsetHeight);
+    medir();
+
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(medir);
+    ro.observe(cabecera);
+    return () => ro.disconnect();
+  }, []);
+
+  useEffect(() => {
+    let raf = 0;
+    const evaluar = () => {
+      raf = 0;
+      const y = window.scrollY;
+      // Histéresis amplia (72px para encoger, 8px para volver a agrandar): al
+      // compactarse la barra pierde ~45px de alto y sin banda muerta oscilaría.
+      setCompacta((actual) => (actual ? y > 8 : y > 72));
+    };
+
+    evaluar();
+    const alScrollear = () => {
+      if (!raf) raf = window.requestAnimationFrame(evaluar);
+    };
+
+    window.addEventListener("scroll", alScrollear, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", alScrollear);
+      if (raf) window.cancelAnimationFrame(raf);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!dialogoCierre || terminando) return;
+    const alTecla = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") setDialogoCierre(null);
+    };
+    window.addEventListener("keydown", alTecla);
+    return () => window.removeEventListener("keydown", alTecla);
+  }, [dialogoCierre, terminando]);
 
   // ── Reloj ────────────────────────────────────────────────────────────────
   // Corrigiendo no corre: `ahora` viene con el `ended_at` real de la sesión.
@@ -343,6 +394,7 @@ export function SessionClient({
   };
 
   const finalizar = () => {
+    setAccionCierre("terminar");
     iniciarTerminar(async () => {
       await vaciarCola();
       const iso = fechaElegida();
@@ -357,8 +409,13 @@ export function SessionClient({
   };
 
   const descartar = () => {
+    setAccionCierre("descartar");
     iniciarTerminar(async () => {
-      // Lo que hubiera en la cola se va con la sesión: no se reintenta.
+      // Se cancela el debounce antes de limpiar para que no salga un lote rezagado.
+      if (temporizador.current) {
+        clearTimeout(temporizador.current);
+        temporizador.current = null;
+      }
       cola.current.clear();
       try {
         localStorage.removeItem(claveCola);
@@ -369,6 +426,14 @@ export function SessionClient({
       }
       await descartarSesion(sesionId);
     });
+  };
+
+  const pulsarBotonPrincipal = () => {
+    if (corrigiendo) {
+      finalizar();
+      return;
+    }
+    setDialogoCierre("terminar");
   };
 
   // ── Derivados ────────────────────────────────────────────────────────────
@@ -390,32 +455,48 @@ export function SessionClient({
 
   return (
     <div className="session">
-      <div className="session-topbar">
-        <div>
-          <div className="eyebrow">
-            {corrigiendo ? "Corrigiendo" : "En curso"} · {titulo}
-          </div>
-          <div className="session-clock">{mmss(segundos)}</div>
-        </div>
-        <div className="session-meta">
+      <div
+        className="session-sticky"
+        data-compact={compacta}
+        style={topSticky !== null ? { top: topSticky } : undefined}
+      >
+        <div className="session-topbar">
           <div>
-            <div className="session-meta-label">Series</div>
-            <div className="session-meta-value">
-              {hechas}/{total}
+            <div className="eyebrow">
+              {corrigiendo ? "Corrigiendo" : "En curso"} · {titulo}
             </div>
+            <div className="session-clock">{mmss(segundos)}</div>
           </div>
-          <div>
-            <div className="session-meta-label">Volumen</div>
-            <div className="session-meta-value">{miles(volumen)} kg</div>
+          <div className="session-meta">
+            <div>
+              <div className="session-meta-label">Series</div>
+              <div className="session-meta-value">
+                {hechas}/{total}
+              </div>
+            </div>
+            <div>
+              <div className="session-meta-label">Volumen</div>
+              <div className="session-meta-value">{miles(volumen)} kg</div>
+            </div>
+            <button
+              className="btn btn-primary"
+              onClick={pulsarBotonPrincipal}
+              disabled={terminando}
+            >
+              {terminando
+                ? accionCierre === "descartar"
+                  ? "Descartando…"
+                  : "Guardando…"
+                : corrigiendo
+                  ? "Guardar"
+                  : "Terminar"}
+            </button>
           </div>
-          <button className="btn btn-primary" onClick={finalizar} disabled={terminando}>
-            {terminando ? "Guardando…" : corrigiendo ? "Guardar" : "Terminar"}
-          </button>
         </div>
-      </div>
 
-      <div className="session-progress">
-        <div style={{ width: `${total ? Math.round((hechas / total) * 100) : 0}%` }} />
+        <div className="session-progress">
+          <div style={{ width: `${total ? Math.round((hechas / total) * 100) : 0}%` }} />
+        </div>
       </div>
 
       {sinConexion && (
@@ -563,7 +644,7 @@ export function SessionClient({
           es lo último que uno quiere pulsar sin querer a mitad de serie. */}
       {!corrigiendo && (
         <div style={{ padding: "18px var(--pad-x)" }}>
-          <button className="btn btn-ghost" onClick={() => setConfirmando(true)}>
+          <button className="btn btn-ghost" onClick={() => setDialogoCierre("descartar")}>
             <Trash2 size={14} /> Descartar este entrenamiento
           </button>
         </div>
@@ -576,8 +657,66 @@ export function SessionClient({
         <VerEjercicio bloque={bloques.find((b) => b.bloque === verFoto)} onCerrar={() => setVerFoto(null)} />
       )}
 
-      {confirmando && (
-        <div className="dialog-backdrop" onClick={() => setConfirmando(false)}>
+      {dialogoCierre === "terminar" && (
+        <div
+          className="dialog-backdrop"
+          onClick={() => !terminando && setDialogoCierre(null)}
+        >
+          <div
+            className="dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Cerrar entrenamiento"
+            onClick={(ev) => ev.stopPropagation()}
+          >
+            <div className="dialog-title">¿Terminar el entrenamiento?</div>
+            <p className="dialog-body">
+              {hechas === 0
+                ? "Todavía no confirmaste ninguna serie. Terminar guarda la sesión vacía; descartar la borra sin registrar nada."
+                : `Llevás ${hechas} de ${total} ${total === 1 ? "serie confirmada" : "series confirmadas"} (${miles(volumen)} kg). Si descartás la sesión no se registra nada.`}
+            </p>
+            <div className="session-cierre-opciones">
+              <button
+                type="button"
+                className="btn btn-primary btn-block"
+                onClick={finalizar}
+                disabled={terminando}
+              >
+                <Check size={15} strokeWidth={3} />
+                {terminando && accionCierre === "terminar"
+                  ? "Guardando…"
+                  : "Terminar entrenamiento"}
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-block"
+                onClick={descartar}
+                disabled={terminando}
+              >
+                <Trash2 size={15} />
+                {terminando && accionCierre === "descartar"
+                  ? "Descartando…"
+                  : "Descartar sesión"}
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-block"
+                onClick={() => setDialogoCierre(null)}
+                disabled={terminando}
+              >
+                <ArrowLeft size={15} />
+                Seguir entrenando
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {dialogoCierre === "descartar" && (
+        <div
+          className="dialog-backdrop"
+          onClick={() => !terminando && setDialogoCierre(null)}
+        >
           <div
             className="dialog"
             role="alertdialog"
@@ -589,14 +728,18 @@ export function SessionClient({
             <p className="dialog-body">
               {hechas === 0
                 ? "No confirmaste ninguna serie, así que no se pierde nada."
-                : `Se pierden las ${hechas} ${hechas === 1 ? "serie confirmada" : "series confirmadas"}. No cuenta para el volumen ni para la adherencia.`}
+                : `Se pierden las ${hechas} ${hechas === 1 ? "serie confirmada" : "series confirmadas"}. No se registra nada en el historial ni en el volumen.`}
             </p>
             <div className="dialog-actions">
-              <button className="btn btn-secondary" onClick={() => setConfirmando(false)}>
+              <button
+                className="btn btn-secondary"
+                onClick={() => setDialogoCierre(null)}
+                disabled={terminando}
+              >
                 Seguir entrenando
               </button>
               <button className="btn btn-primary" onClick={descartar} disabled={terminando}>
-                {terminando ? "Descartando…" : "Descartar"}
+                {terminando && accionCierre === "descartar" ? "Descartando…" : "Descartar"}
               </button>
             </div>
           </div>

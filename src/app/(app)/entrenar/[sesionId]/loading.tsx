@@ -9,30 +9,32 @@ export default function Loading() {
   return (
     <SkPantalla>
       <div className="session">
-        <div className="session-topbar">
-          <div>
-            {/* Sin etiqueta: la pantalla puede abrirse en curso o corrigiendo,
-                y adelantar la equivocada da un parpadeo raro. */}
-            <div className="eyebrow" style={{ opacity: 0.4 }}>
-              &nbsp;
+        <div className="session-sticky">
+          <div className="session-topbar">
+            <div>
+              {/* Sin etiqueta: la pantalla puede abrirse en curso o corrigiendo,
+                  y adelantar la equivocada da un parpadeo raro. */}
+              <div className="eyebrow" style={{ opacity: 0.4 }}>
+                &nbsp;
+              </div>
+              <div className="session-clock" style={{ opacity: 0.4 }}>
+                --:--
+              </div>
             </div>
-            <div className="session-clock" style={{ opacity: 0.4 }}>
-              --:--
+            <div className="session-meta" style={{ opacity: 0.4 }}>
+              <div>
+                <div className="session-meta-label">Series</div>
+                <div className="session-meta-value">—</div>
+              </div>
+              <div>
+                <div className="session-meta-label">Volumen</div>
+                <div className="session-meta-value">—</div>
+              </div>
             </div>
           </div>
-          <div className="session-meta" style={{ opacity: 0.4 }}>
-            <div>
-              <div className="session-meta-label">Series</div>
-              <div className="session-meta-value">—</div>
-            </div>
-            <div>
-              <div className="session-meta-label">Volumen</div>
-              <div className="session-meta-value">—</div>
-            </div>
-          </div>
-        </div>
 
-        <div className="session-progress" />
+          <div className="session-progress" />
+        </div>
 
         {Array.from({ length: 3 }, (_, b) => (
           <section className="exercise-block" key={b}>
